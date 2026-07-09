@@ -1,0 +1,20 @@
+# Experiment v2 - configurator comparison: BO vs Random Search vs SMAC at scale.
+#
+# 4 configurators x 2 train sizes x 25 seeds = 200 runs.
+# Budget per run: n_trials proposals for fixed-budget arms; the smac_aac arm gets
+# the identical total SA-call budget (n_trials * train_size * solver_repeats),
+# allocated by SMAC's native intensifier instead of uniformly.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+train_families: [mixed]
+train_sizes: [20, 40]
+n_seeds: 25              # seeds 0..24
+n_trials: 250
+solver_repeats: 1        # instances-per-config averaging already stabilizes the estimator
+test_solver_repeats: 2
+test_size: 100
+n_cities: 50
+max_steps: 30000
+tpe_startup_trials: 25   # 10% of budget, mirrored by smac_initial_configs
+smac_initial_configs: 25
+smac_max_config_calls: 0 # 0 -> 3 * train_size (max intensification depth per config)
+smac_retrain_after: 8    # SMAC default surrogate refit interval

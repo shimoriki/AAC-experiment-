@@ -1,0 +1,14 @@
+# Stage A - smoke test: confirm the pipeline runs and logs correctly (minutes).
+optimizers: [optuna_tpe]
+resamplings: [holdout, cv5]
+families: [mixed]
+train_sizes: [10]
+seeds: [0]
+bo_budget: 10
+solver_repeats: 1
+test_solver_repeats: 1
+test_size: 20
+n_cities: 50
+max_steps: 8000
+cv_repeats: 2
+bootstrap_repeats: 5

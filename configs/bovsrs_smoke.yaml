@@ -1,0 +1,16 @@
+# Smoke profile for experiment v2: 4 x 1 x 2 = 8 tiny runs, a few minutes total.
+# Verifies all four configurator arms end-to-end (incl. SMAC) before the real run.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+train_families: [mixed]
+train_sizes: [8]
+n_seeds: 2
+n_trials: 12
+solver_repeats: 1
+test_solver_repeats: 1
+test_size: 10
+n_cities: 50
+max_steps: 30000
+tpe_startup_trials: 4
+smac_initial_configs: 4
+smac_max_config_calls: 0
+smac_retrain_after: 8

@@ -1,0 +1,18 @@
+# Stage C - final experiment.
+# Two config spaces x 360 cells = 720 runs:
+#   full       -> realistic AAC space (overtuning shows up in the generalization gap)
+#   fixed_2opt -> move_type fixed to 2opt (clean relative-overtuning ECDF, no move cliff)
+config_spaces: [full, fixed_2opt]
+optimizers: [optuna_tpe, random]
+resamplings: [holdout, cv5, repeated_cv5, bootstrap_oob]
+families: [uniform, clustered, mixed]
+train_sizes: [10, 25, 50]
+seeds: [0, 1, 2, 3, 4]
+bo_budget: 50
+solver_repeats: 3
+test_solver_repeats: 3
+test_size: 100
+n_cities: 50
+max_steps: 30000
+cv_repeats: 3
+bootstrap_repeats: 10

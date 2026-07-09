@@ -1,0 +1,6 @@
+# Shell scripts must stay LF or bash on the VM chokes on \r
+*.sh text eol=lf
+*.sbatch text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf

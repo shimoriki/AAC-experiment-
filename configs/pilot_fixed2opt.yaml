@@ -1,0 +1,17 @@
+# Verification pilot for the fixed_2opt config space: same grid as pilot.yaml but with
+# move_type fixed to 2opt, to confirm the relative-overtuning ECDF separates by resampling
+# once the move-type performance cliff is removed.
+config_spaces: [fixed_2opt]
+optimizers: [optuna_tpe]
+resamplings: [holdout, cv5, bootstrap_oob]
+families: [uniform, clustered, mixed]
+train_sizes: [10, 25]
+seeds: [0, 1, 2]
+bo_budget: 30
+solver_repeats: 1
+test_solver_repeats: 3
+test_size: 50
+n_cities: 50
+max_steps: 20000
+cv_repeats: 2
+bootstrap_repeats: 10
