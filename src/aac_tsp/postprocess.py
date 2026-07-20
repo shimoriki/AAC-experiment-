@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from .metrics import EPS, incumbent_trajectory, summarize_run
+from .metrics import (EPS, RELATIVE_OVERTUNING_MIN_PROGRESS,
+                      incumbent_trajectory, summarize_run)
 
 
 def load_raw_runs(raw_dir: Path) -> list[pd.DataFrame]:
@@ -67,13 +68,17 @@ def build_outputs(raw_dir: Path, processed_dir: Path, summaries_dir: Path) -> di
                  std_final_test_cost=("final_test_cost", "std"),
                  mean_generalization_gap=("final_generalization_gap", "mean"),
                  mean_relative_overtuning=("final_relative_overtuning", "mean"),
+                 n_relative_overtuning_eligible=("relative_overtuning_eligible", "sum"),
+                 proportion_relative_overtuning_eligible=(
+                     "relative_overtuning_eligible", "mean"),
                  proportion_nonzero_overtuning=("proportion_nonzero_overtuning", "mean"),
-                 proportion_severe_overtuning=("final_relative_overtuning",
-                                               lambda s: (s >= 1).mean()),
+                 proportion_final_overtuned=("is_final_overtuned", "mean"),
+                 proportion_severe_overtuning=("is_severe_overtuning", "mean"),
                  mean_runtime_sec=("total_validation_runtime_sec", "mean"),
                  n_runs=("run_id", "count")))
     cond_path = summaries_dir / "condition_summary.csv"
     cond.to_csv(cond_path, index=False)
 
     return {"trajectories": traj_path, "summary": summary_path, "condition": cond_path,
-            "n_runs": len(runs), "eps": EPS}
+            "n_runs": len(runs), "eps": EPS,
+            "relative_overtuning_min_progress": RELATIVE_OVERTUNING_MIN_PROGRESS}

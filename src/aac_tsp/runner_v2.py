@@ -1,21 +1,23 @@
-"""Experiment v2: configurator comparison at scale (BO vs Random Search vs SMAC).
+"""Experiment v2: configurator × instance-resampling comparison at scale.
 
-Four arms, all optimizing the same extended 15-parameter SA space on the same
-training instances with the same total target-algorithm budget:
+Four arms, all optimizing the same selected v2 SA space (the 15-parameter full
+space or the 11-parameter pure-2-opt view) on the same training instances with
+the same total target-algorithm budget:
 
-  random      Optuna RandomSampler; fixed budget of ``n_trials`` proposals, each
-              evaluated on the full training set (CRN seed stream).
+  random      Optuna RandomSampler; each proposal is evaluated on the selected
+              fixed instance-resampling plan (CRN seed stream).
   optuna_tpe  Optuna TPESampler (multivariate, grouped); same protocol as random.
-  smac_bo     SMAC3 HyperparameterOptimizationFacade (RF-based BO); same fixed-budget
-              protocol as the Optuna arms (each proposal = full training-set eval).
+  smac_bo     SMAC3 HyperparameterOptimizationFacade (RF-based BO); same fixed
+              resampling estimator as the Optuna arms.
   smac_aac    SMAC3 AlgorithmConfigurationFacade with *native intensification*:
               SMAC decides per configuration how many (instance, seed) pairs to
               spend; each target call is a single SA run on a single instance.
 
 Budget fairness -- the unit is one SA solver call (config x instance x seed):
-  fixed-budget arms: n_trials * train_size * solver_repeats calls
-  smac_aac:          exactly the same number of calls, but allocated by the
-                     intensifier instead of uniformly.
+  common cap:        n_trials * train_size * solver_repeats calls
+  fixed-budget arms: floor(cap / estimator calls) complete proposals; any unused
+                     remainder is smaller than one atomic estimator evaluation
+  smac_aac:          exactly the cap, allocated by the intensifier.
 
 Two invariants carried over from the v1 experiment:
   1. The configurator never sees test cost. Test (and, for smac_aac, the canonical
@@ -38,13 +40,22 @@ import pandas as pd
 
 from . import FAMILIES
 from .evaluation_v2 import (compute_instance_features, evaluate_on_ids,
-                            evaluate_on_test, evaluate_single_call)
+                            evaluate_on_resampling_plan, evaluate_on_test,
+                            evaluate_single_call)
+from .naming_v2 import run_id_v2
+from .objective import _derive_seed
+from .resampling_v2 import (RESAMPLINGS_V2, build_resampling_plan_v2)
 from .runner import _load_all_instances
-from .space_v2 import (PARAM_COLUMNS, config_from_mapping, config_key,
-                       optuna_suggest_v2)
+from .space_v2 import (CONFIG_SPACES_V2, active_param_columns,
+                       config_from_mapping, config_key, optuna_suggest_v2)
 
 OPTIMIZERS_V2 = ("random", "optuna_tpe", "smac_bo", "smac_aac")
 INCUMBENT_TOL = 1e-15
+# The primary unseen-test distribution must be identical when train_family is
+# varied.  Otherwise a cross-family comparison confounds training composition
+# with the known uniform/clustered test-family difficulty difference.  All three
+# family-specific test costs are still retained for transfer analysis.
+PRIMARY_TEST_FAMILY_V2 = "mixed"
 
 
 @dataclass
@@ -54,6 +65,8 @@ class RunConfigV2:
     train_size: int
     n_trials: int              # fixed-budget proposals; defines the SA-call budget
     seed: int
+    config_space: str = "full"
+    resampling: str = "full_train"
     n_cities: int = 50
     solver_repeats: int = 1    # SA seeds per instance in the canonical estimator
     test_solver_repeats: int = 2
@@ -63,16 +76,23 @@ class RunConfigV2:
     smac_initial_configs: int = 25   # initial design size of the smac_bo arm
     smac_max_config_calls: int = 0   # cap per config for smac_aac; 0 -> 3 * train_size
     smac_retrain_after: int = 8      # surrogate refit interval for smac_aac
-    data_dir: str = "/local/anmol/datasets/tsp"
+    cv_repeats: int = 3
+    bootstrap_repeats: int = 10
+    progress_interval: int = 20      # proposals/target calls between log updates
+    data_dir: str = "/local/rohit/datasets/tsp"
     out_dir: str = "results/v2/raw"
     smac_scratch: str = "results/v2/smac_output"
 
     @property
     def run_id(self) -> str:
-        return f"{self.optimizer}_{self.train_family}_n{self.train_size}_seed{self.seed}"
+        return run_id_v2(self.optimizer, self.train_family, self.train_size,
+                         self.seed, self.config_space, self.resampling)
 
     @property
     def total_budget_calls(self) -> int:
+        # A common reference budget for every resampling x configurator cell.
+        # Methods with cheaper estimators can evaluate more proposals, while
+        # expensive repeated estimators evaluate fewer proposals.
         return self.n_trials * self.train_size * self.solver_repeats
 
 
@@ -84,6 +104,25 @@ class _Context:
          self.train_ids, self.test_ids) = _load_all_instances(
             cfg.data_dir, cfg.n_cities, cfg.train_family,
             cfg.train_size, cfg.test_size, cfg.seed)
+        self.resampling_plan = build_resampling_plan_v2(
+            self.train_ids,
+            cfg.resampling,
+            cfg.seed,
+            cv_repeats=cfg.cv_repeats,
+            bootstrap_repeats=cfg.bootstrap_repeats,
+        )
+        self.resampling_units = self.resampling_plan.units()
+        self.unit_by_key = {unit.key: unit for unit in self.resampling_units}
+        calls = self.resampling_plan.calls_per_config(cfg.solver_repeats)
+        if calls > cfg.total_budget_calls:
+            raise ValueError(
+                f"SA-call budget {cfg.total_budget_calls} cannot fund one complete "
+                f"{cfg.resampling} estimator evaluation ({calls} calls)"
+            )
+        self.fixed_proposal_budget = cfg.total_budget_calls // calls
+        self.fixed_unused_budget_calls = (
+            cfg.total_budget_calls - self.fixed_proposal_budget * calls
+        )
 
 
 class _CanonicalEvaluator:
@@ -132,6 +171,8 @@ def _traj_row(cfg: RunConfigV2, event: int, event_type: str, trial_id: int,
     row = {
         "run_id": cfg.run_id,
         "optimizer": cfg.optimizer,
+        "config_space": cfg.config_space,
+        "resampling": cfg.resampling,
         "train_family": cfg.train_family,
         "train_size": cfg.train_size,
         "seed": cfg.seed,
@@ -141,7 +182,8 @@ def _traj_row(cfg: RunConfigV2, event: int, event_type: str, trial_id: int,
         "trial_id": trial_id,
         "cum_sa_calls": cum_sa_calls,
         "val_cost": entry["val_cost"],
-        "test_cost": entry[f"test_cost_{cfg.train_family}"],
+        "selection_val_cost": entry.get("selection_val_cost", entry["val_cost"]),
+        "test_cost": entry[f"test_cost_{PRIMARY_TEST_FAMILY_V2}"],
         "wallclock_sec": time.perf_counter() - t_start,
     }
     for fam in FAMILIES:
@@ -153,10 +195,13 @@ def _traj_row(cfg: RunConfigV2, event: int, event_type: str, trial_id: int,
 def _trial_row(cfg: RunConfigV2, trial_id: int, config, observed_cost: float,
                n_sa_calls: int, cum_sa_calls: int, is_incumbent: bool,
                ask_sec: float, eval_sec: float, tell_sec: float,
-               instance_id: str = "", smac_seed: int = -1) -> dict:
+               instance_id: str = "", smac_seed: int = -1,
+               resampling_unit: str = "") -> dict:
     row = {
         "run_id": cfg.run_id,
         "optimizer": cfg.optimizer,
+        "config_space": cfg.config_space,
+        "resampling": cfg.resampling,
         "train_family": cfg.train_family,
         "train_size": cfg.train_size,
         "seed": cfg.seed,
@@ -167,6 +212,7 @@ def _trial_row(cfg: RunConfigV2, trial_id: int, config, observed_cost: float,
         "cum_sa_calls": cum_sa_calls,
         "is_incumbent": bool(is_incumbent),
         "instance_id": instance_id,
+        "resampling_unit": resampling_unit,
         "smac_seed": smac_seed,
         "ask_sec": ask_sec,
         "eval_sec": eval_sec,
@@ -174,6 +220,22 @@ def _trial_row(cfg: RunConfigV2, trial_id: int, config, observed_cost: float,
     }
     row.update(config.as_dict())
     return row
+
+
+def _log_progress(cfg: RunConfigV2, completed: int, total: int,
+                  cum_sa_calls: int, t_start: float, incumbent: float | None = None):
+    interval = max(1, int(cfg.progress_interval))
+    if completed != total and completed % interval:
+        return
+    inc = "n/a" if incumbent is None or not np.isfinite(incumbent) else f"{incumbent:.6g}"
+    print(
+        f"[{cfg.run_id}] progress optimizer={cfg.optimizer} resampling={cfg.resampling} "
+        f"family={cfg.train_family} "
+        f"train_size={cfg.train_size} seed={cfg.seed} step={completed}/{total} "
+        f"sa_calls={cum_sa_calls}/{cfg.total_budget_calls} incumbent_val={inc} "
+        f"elapsed_sec={time.perf_counter() - t_start:.1f}",
+        flush=True,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -191,15 +253,23 @@ def _run_fixed_budget(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEval
     n_inc = 0
     totals = {"ask_sec": 0.0, "eval_sec": 0.0, "tell_sec": 0.0}
 
-    for trial_id in range(cfg.n_trials):
+    proposal_budget = ctx.fixed_proposal_budget
+    for trial_id in range(proposal_budget):
         t0 = time.perf_counter()
         try:
             handle, config = ask_fn()
         except StopIteration:  # SMAC can refuse the ask at exact budget exhaustion
             break
         t1 = time.perf_counter()
-        vres = evaluate_on_ids(config, ctx.train_ids, ctx.dist_by_id, ctx.bk,
-                               ctx.id_index, cfg.seed, cfg.solver_repeats, cfg.max_steps)
+        vres = evaluate_on_resampling_plan(
+            config,
+            ctx.resampling_plan,
+            ctx.dist_by_id,
+            ctx.bk,
+            ctx.id_index,
+            cfg.solver_repeats,
+            cfg.max_steps,
+        )
         val = vres["cost"]
         t2 = time.perf_counter()
         tell_fn(handle, val)
@@ -213,7 +283,11 @@ def _run_fixed_budget(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEval
         is_inc = val < incumbent_val - INCUMBENT_TOL
         if is_inc or trial_id == 0:
             incumbent_val = min(incumbent_val, val)
-            entry = evaluator.evaluate(config, known_val=val)
+            canonical = evaluator.evaluate(
+                config,
+                known_val=val if cfg.resampling == "full_train" else None,
+            )
+            entry = {**canonical, "selection_val_cost": val}
             traj.append(_traj_row(cfg, n_inc, "incumbent", trial_id, cum, config,
                                   entry, t_start))
             n_inc += 1
@@ -221,6 +295,7 @@ def _run_fixed_budget(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEval
         trials.append(_trial_row(cfg, trial_id, config, val, vres["n_sa_calls"], cum,
                                  is_inc or trial_id == 0,
                                  t1 - t0, t2 - t1, t3 - t2))
+        _log_progress(cfg, trial_id + 1, proposal_budget, cum, t_start, incumbent_val)
 
     # closing row: extend the incumbent step function to the exact budget end
     if traj:
@@ -230,6 +305,7 @@ def _run_fixed_budget(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEval
         traj.append(last)
 
     totals.update({"n_incumbent_changes": n_inc, "total_sa_calls_optimization": cum,
+                   "n_proposals": len(trials),
                    "wallclock_sec": time.perf_counter() - t_start})
     return trials, traj, totals
 
@@ -251,7 +327,7 @@ def _run_optuna(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEvaluator)
 
     def ask_fn():
         trial = study.ask()
-        return trial, optuna_suggest_v2(trial)
+        return trial, optuna_suggest_v2(trial, cfg.config_space)
 
     def tell_fn(trial, cost):
         study.tell(trial, cost)
@@ -279,34 +355,42 @@ def _run_smac_bo(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEvaluator
 
     from .space_v2 import build_configspace
 
-    cs = build_configspace(cfg.seed)
+    cs = build_configspace(cfg.seed, cfg.config_space)
     scenario = Scenario(
         cs,
         name=cfg.run_id,
         output_directory=Path(cfg.smac_scratch),
         deterministic=True,   # the CRN estimator is deterministic given the config
-        n_trials=cfg.n_trials,
+        n_trials=ctx.fixed_proposal_budget,
         seed=cfg.seed,
     )
 
     def _target(config, seed: int = 0) -> float:  # required by the facade; loop uses ask/tell
-        vres = evaluate_on_ids(config_from_mapping(config), ctx.train_ids, ctx.dist_by_id,
-                               ctx.bk, ctx.id_index, cfg.seed, cfg.solver_repeats,
-                               cfg.max_steps)
+        vres = evaluate_on_resampling_plan(
+            config_from_mapping(config, cfg.config_space),
+            ctx.resampling_plan,
+            ctx.dist_by_id,
+            ctx.bk,
+            ctx.id_index,
+            cfg.solver_repeats,
+            cfg.max_steps,
+        )
         return vres["cost"]
 
     smac = HPOFacade(
         scenario,
         _target,
-        initial_design=HPOFacade.get_initial_design(scenario,
-                                                    n_configs=cfg.smac_initial_configs),
+        initial_design=HPOFacade.get_initial_design(
+            scenario,
+            n_configs=min(cfg.smac_initial_configs, ctx.fixed_proposal_budget),
+        ),
         overwrite=True,
         logging_level=30,
     )
 
     def ask_fn():
         info = smac.ask()
-        return info, config_from_mapping(info.config)
+        return info, config_from_mapping(info.config, cfg.config_space)
 
     def tell_fn(info, cost):
         # save=False: we persist everything ourselves; SMAC's default re-writes the
@@ -330,9 +414,11 @@ def _run_smac_aac(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEvaluato
 
     from .space_v2 import build_configspace
 
-    cs = build_configspace(cfg.seed)
-    features = {iid: compute_instance_features(ctx.dist_by_id[iid])
-                for iid in ctx.train_ids}
+    cs = build_configspace(cfg.seed, cfg.config_space)
+    features = {
+        unit.key: compute_instance_features(ctx.dist_by_id[unit.instance_id])
+        for unit in ctx.resampling_units
+    }
     budget = cfg.total_budget_calls
     scenario = Scenario(
         cs,
@@ -340,14 +426,25 @@ def _run_smac_aac(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEvaluato
         output_directory=Path(cfg.smac_scratch),
         deterministic=False,          # SA is stochastic; SMAC races over seeds too
         n_trials=budget,
-        instances=list(ctx.train_ids),
+        instances=[unit.key for unit in ctx.resampling_units],
         instance_features=features,
         seed=cfg.seed,
     )
 
     def _target(config, instance: str, seed: int = 0) -> float:
-        return evaluate_single_call(config_from_mapping(config), instance, seed,
-                                    ctx.dist_by_id, ctx.bk, cfg.max_steps)["cost"]
+        unit = ctx.unit_by_key[str(instance)]
+        sa_seed = _derive_seed(
+            unit.subset_seed, ctx.id_index[unit.instance_id], int(seed or 0)
+        )
+        result = evaluate_single_call(
+            config_from_mapping(config, cfg.config_space),
+            unit.instance_id,
+            sa_seed,
+            ctx.dist_by_id,
+            ctx.bk,
+            cfg.max_steps,
+        )
+        return result["cost"] * unit.weight
 
     max_config_calls = cfg.smac_max_config_calls or 3 * cfg.train_size
     smac = ACFacade(
@@ -374,14 +471,30 @@ def _run_smac_aac(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEvaluato
             info = smac.ask()
         except StopIteration:
             break
-        config = config_from_mapping(info.config)
+        config = config_from_mapping(info.config, cfg.config_space)
         t1 = time.perf_counter()
-        res = evaluate_single_call(config, info.instance, info.seed,
-                                   ctx.dist_by_id, ctx.bk, cfg.max_steps)
+        unit = ctx.unit_by_key[str(info.instance)]
+        smac_seed = int(info.seed if info.seed is not None else 0)
+        sa_seed = _derive_seed(
+            unit.subset_seed, ctx.id_index[unit.instance_id], smac_seed
+        )
+        res = evaluate_single_call(
+            config,
+            unit.instance_id,
+            sa_seed,
+            ctx.dist_by_id,
+            ctx.bk,
+            cfg.max_steps,
+        )
+        weighted_cost = res["cost"] * unit.weight
         t2 = time.perf_counter()
         # save=False: re-writing the runhistory JSON on each of the ~10k tells would
         # be quadratic disk I/O; all logging is done by this runner instead.
-        smac.tell(info, TrialValue(cost=res["cost"], time=res["runtime_sec"]), save=False)
+        smac.tell(
+            info,
+            TrialValue(cost=weighted_cost, time=res["runtime_sec"]),
+            save=False,
+        )
         t3 = time.perf_counter()
 
         cum += res["n_sa_calls"]
@@ -392,7 +505,7 @@ def _run_smac_aac(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEvaluato
         inc = smac.intensifier.get_incumbent()
         is_inc_config = False
         if inc is not None:
-            inc_config = config_from_mapping(inc)
+            inc_config = config_from_mapping(inc, cfg.config_space)
             inc_key = config_key(inc_config)
             is_inc_config = inc_key == config_key(config)
             if inc_key != prev_inc_key:
@@ -403,16 +516,20 @@ def _run_smac_aac(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEvaluato
                 n_inc += 1
                 last_entry, last_config, last_trial = entry, inc_config, i
 
-        trials.append(_trial_row(cfg, i, config, res["cost"], res["n_sa_calls"], cum,
+        trials.append(_trial_row(cfg, i, config, weighted_cost, res["n_sa_calls"], cum,
                                  is_inc_config, t1 - t0, t2 - t1, t3 - t2,
-                                 instance_id=str(info.instance),
-                                 smac_seed=int(info.seed if info.seed is not None else -1)))
+                                 instance_id=unit.instance_id,
+                                 smac_seed=smac_seed,
+                                 resampling_unit=unit.key))
+        incumbent_val = last_entry["val_cost"] if last_entry is not None else None
+        _log_progress(cfg, i + 1, budget, cum, t_start, incumbent_val)
 
     if last_entry is not None:
         traj.append(_traj_row(cfg, n_inc, "final", last_trial, cum, last_config,
                               last_entry, t_start))
 
     totals.update({"n_incumbent_changes": n_inc, "total_sa_calls_optimization": cum,
+                   "n_proposals": len({r["config_id"] for r in trials}),
                    "wallclock_sec": time.perf_counter() - t_start})
     return trials, traj, totals
 
@@ -422,6 +539,16 @@ def _run_smac_aac(cfg: RunConfigV2, ctx: _Context, evaluator: _CanonicalEvaluato
 def run_experiment_v2(cfg: RunConfigV2) -> Path:
     if cfg.optimizer not in OPTIMIZERS_V2:
         raise ValueError(f"unknown optimizer {cfg.optimizer!r}; expected one of {OPTIMIZERS_V2}")
+    if cfg.config_space not in CONFIG_SPACES_V2:
+        raise ValueError(
+            f"unknown config_space {cfg.config_space!r}; expected one of {CONFIG_SPACES_V2}"
+        )
+    if cfg.resampling not in RESAMPLINGS_V2:
+        raise ValueError(
+            f"unknown resampling {cfg.resampling!r}; expected one of {RESAMPLINGS_V2}"
+        )
+    if cfg.progress_interval < 1:
+        raise ValueError("progress_interval must be >= 1")
 
     ctx = _Context(cfg)
     evaluator = _CanonicalEvaluator(cfg, ctx)
@@ -446,6 +573,21 @@ def run_experiment_v2(cfg: RunConfigV2) -> Path:
         "run_config": asdict(cfg),
         "run_id": cfg.run_id,
         "total_budget_calls": cfg.total_budget_calls,
+        "resampling": cfg.resampling,
+        "resampling_n_subsets": ctx.resampling_plan.n_subsets,
+        "resampling_instance_evaluations_per_config": (
+            ctx.resampling_plan.n_instance_evaluations
+        ),
+        "resampling_sa_calls_per_config": (
+            ctx.resampling_plan.calls_per_config(cfg.solver_repeats)
+        ),
+        "fixed_proposal_budget": ctx.fixed_proposal_budget,
+        "fixed_unused_budget_calls": (
+            ctx.fixed_unused_budget_calls if cfg.optimizer != "smac_aac" else 0
+        ),
+        "resampling_subset_sizes": [
+            len(ids) for ids, _ in ctx.resampling_plan.subsets
+        ],
         "total_sa_calls_optimization": totals["total_sa_calls_optimization"],
         "total_sa_calls_analysis": evaluator.analysis_sa_calls,
         "analysis_runtime_sec": evaluator.analysis_runtime_sec,
@@ -455,22 +597,31 @@ def run_experiment_v2(cfg: RunConfigV2) -> Path:
         "wallclock_sec": totals["wallclock_sec"],
         "n_incumbent_changes": totals["n_incumbent_changes"],
         "n_distinct_configs": n_distinct,
-        "param_columns": PARAM_COLUMNS,
+        "n_proposals": totals.get("n_proposals", n_distinct),
+        "param_columns": active_param_columns(cfg.config_space),
+        "primary_test_family": PRIMARY_TEST_FAMILY_V2,
         "train_instance_ids": list(ctx.train_ids),
         "versions": _versions(),
     }
-    (out_dir / f"{cfg.run_id}.json").write_text(json.dumps(sidecar, indent=2))
-    return traj_path
+    sidecar_path = out_dir / f"{cfg.run_id}.json"
+    sidecar_path.write_text(json.dumps(sidecar, indent=2))
+    return sidecar_path
 
 
 def _versions() -> dict:
-    import numba
-    import optuna
-    v = {"numpy": np.__version__, "pandas": pd.__version__,
-         "numba": numba.__version__, "optuna": optuna.__version__}
-    try:
-        import smac
-        v["smac"] = smac.__version__
-    except ImportError:
-        pass
-    return v
+    """Return installed distribution versions without relying on module attrs."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    installed = {}
+    for label, distribution in (
+            ("numpy", "numpy"),
+            ("pandas", "pandas"),
+            ("numba", "numba"),
+            ("optuna", "optuna"),
+            ("smac", "smac"),
+            ("ConfigSpace", "ConfigSpace")):
+        try:
+            installed[label] = version(distribution)
+        except PackageNotFoundError:
+            pass
+    return installed

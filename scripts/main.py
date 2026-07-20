@@ -34,7 +34,7 @@ def main():
     ap.add_argument("--max_steps", type=int, default=DEFAULT_MAX_STEPS)
     ap.add_argument("--cv_repeats", type=int, default=3)
     ap.add_argument("--bootstrap_repeats", type=int, default=10)
-    ap.add_argument("--data_dir", default="/local/anmol/datasets/tsp")
+    ap.add_argument("--data_dir", default="/local/rohit/datasets/tsp")
     ap.add_argument("--out_dir", default="results/raw")
     args = ap.parse_args()
 

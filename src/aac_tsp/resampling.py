@@ -11,7 +11,8 @@ subset_seed) pairs. The validation cost is the mean over subsets of the mean gap
 within each subset. The plan is built once per run (fixed across all BO trials of
 that run) so every configuration is judged on the same estimator.
 
-Variance ordering (by design): holdout > 5-fold CV > repeated 5-fold CV.
+Variance ordering (by design): holdout instance sampling > 5-fold instance
+resampling > repeated 5-fold instance resampling.
 """
 
 from __future__ import annotations

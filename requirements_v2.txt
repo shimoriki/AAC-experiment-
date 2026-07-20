@@ -1,6 +1,6 @@
 # Experiment v2 (configurator comparison) — adds SMAC3 on top of the base stack.
-# NOTE: pyrfr (SMAC's random forest) builds from source; on the VM run first:
-#   sudo apt-get install -y swig build-essential
+# NOTE: pyrfr (SMAC's random forest) builds from source. slurm/setup_env.sh
+# installs a rootless SWIG binary; a system C++ compiler must be available.
 # SMAC is Linux/macOS only — the random / optuna_tpe arms run anywhere.
 -r requirements.txt
 ConfigSpace>=1.1

@@ -19,7 +19,7 @@ The full experiment has already been run and results are committed. The typical 
 - **720-run final experiment: COMPLETE** (`results/FINAL_COMPLETE` exists).
 - Raw CSVs: `results/raw/full/` (360 files) and `results/raw/fixed_2opt/` (360 files).
 - Post-processed trajectories and summaries: `results/processed/` and `results/summaries/`.
-- Figures: `figures/full/` and `figures/fixed_2opt/` (8 figures each). Pilot-run figures archived in `figures/pilot/`.
+- Figures: `figures/full/` and `figures/fixed_2opt/` (13 figures each after replotting). Pilot-run figures archived in `figures/pilot/`.
 - Pilot artifacts (54 runs): `results/raw/*.csv` (top-level, not subdirectory).
 
 ### Figure changes made for the preliminary result presentation (post-experiment)
@@ -74,7 +74,7 @@ The `run_final.sh` driver already does this with `-P 48`.
 | `src/aac_tsp/resampling.py` | All four resampling strategy classes |
 | `src/aac_tsp/optimizers.py` | `suggest_config(trial, config_space)` — note the `config_space` param |
 | `src/aac_tsp/metrics.py` | Definitions of overtuning, relative overtuning, generalisation gap |
-| `src/aac_tsp/plotting.py` | All 7 figures; `RESAMPLING_LABELS` maps code keys to display names |
+| `src/aac_tsp/plotting.py` | All 13 v1 figures; `RESAMPLING_LABELS` maps code keys to display names |
 | `scripts/create_experiments.py` | Expands a profile YAML into `run_experiments.sh`; handles `config_spaces` |
 | `configs/final.yaml` | The full experiment grid |
 
@@ -86,7 +86,7 @@ The `run_final.sh` driver already does this with `-P 48`.
 
 ```bash
 source .venv/bin/activate
-# Regenerate instances if needed (only if /local/anmol/datasets/tsp/ is missing)
+# Regenerate instances if needed (only if /local/rohit/datasets/tsp/ is missing)
 python scripts/generate_instances.py --n_cities 50 --n_train_pool 150 --n_test 100
 python scripts/compute_best_known.py --n_cities 50 --n_starts 20
 
@@ -151,9 +151,15 @@ python scripts/main.py \
 
 ## VM environment
 
-- **Path:** `/local/anmol/aac_tsp_overtuning`
+- **Path:** `/local/rohit/projects/aacnewtest`
 - **Python venv:** `.venv/` (activate with `source .venv/bin/activate`)
-- **Instance data:** `/local/anmol/datasets/tsp/` (not in this repo)
+- **Fresh clone:** run `bash slurm/setup_env.sh` before the first activation;
+  `slurm/run_local.sh` and `slurm/submit_all.sh` also bootstrap it automatically.
+- **SMAC build dependency:** `slurm/setup_env.sh` installs a working SWIG inside
+  `.venv` without sudo and replaces a broken wheel launcher when necessary. A
+  system C++ compiler is still required; use a user-owned conda toolchain or ask
+  the administrator if `g++`/`c++` is absent.
+- **Instance data:** `/local/rohit/datasets/tsp/` (not in this repo)
 - **CPU:** 64 vCPUs (Intel Xeon Platinum 8462Y+), 125 GB RAM, no GPU
 - **Disk:** ~600 GB free on `/local`; write large outputs there, not to `/tmp` or `/`
 - **Internet:** available; PyPI reachable
@@ -165,7 +171,7 @@ python scripts/main.py \
 ## What the results show (summary for context)
 
 **Full config space:**
-Holdout has the largest generalisation gap (0.0066 vs 0.0006 for repeated CV / bootstrap OOB) and the highest overtuning frequency (16 % vs 6–8 %). Stronger resampling nearly eliminates the gap at 14–17× runtime cost. Training-pool size matters: the gap at n=10 is 2–3× larger than at n=50 for all resamplings.
+Holdout instance sampling has the largest generalisation gap (0.0066 vs 0.0006 for repeated 5-fold instance resampling / Bootstrap OOB instance resampling) and the highest overtuning frequency (16 % vs 6–8 %). Stronger resampling nearly eliminates the gap at 14–17× runtime cost. Training-pool size matters: the gap at n=10 is 2–3× larger than at n=50 for all resamplings.
 
 **Fixed_2opt config space (ECDF headline):**
 Removing the move-type cliff reveals relative overtuning. Holdout: mean 13.7 % of tuning progress lost. Repeated 5-fold instance resampling: 3.5 %. The ECDF of relative overtuning in `figures/fixed_2opt/ecdf_relative_overtuning.png` is the paper-style headline figure.
@@ -175,18 +181,19 @@ Training on `mixed` instances generalises best across all test families. The dom
 
 ---
 
-## Experiment v2 — configurator comparison (added later; separate code path)
+## Experiment v2 — configurator × resampling comparison (separate code path)
 
-v2 compares **configurators** (random, optuna_tpe, smac_bo, smac_aac) at equal
-total SA-call budget on a 15-parameter config space. It is fully documented in
-`EXPERIMENT_V2.md` and deliberately does **not** touch any v1 module: new files
-are `solver_sa_ext.py`, `space_v2.py`, `evaluation_v2.py`, `runner_v2.py`,
-`postprocess_v2.py`, `plotting_v2.py`, `scripts/*_v2.py`, `configs/bovsrs*.yaml`,
-and `slurm/`. Key invariants:
+v2 jointly compares **configurators** (random, optuna_tpe, smac_bo, smac_aac)
+and **instance-resampling methods** (holdout, cv5, repeated_cv5, bootstrap_oob)
+at equal total SA-call budget. It is documented in `EXPERIMENT_V2.md` and uses
+the separate v2 runner, evaluator, postprocessor, plotter, profiles, and SLURM
+launchers. Key invariants:
 
-1. **Budget unit = one SA solver call.** The smac_aac arm gets
-   `n_trials * train_size * solver_repeats` single-instance target calls; the
-   fixed-budget arms spend the same total. Never compare arms "per iteration".
+1. **Budget unit = one SA solver call.** The common cap is
+   `n_trials * train_size * solver_repeats`. SMAC-AAC spends the cap exactly;
+   fixed-estimator arms run as many complete estimator evaluations as fit, so an
+   unused remainder smaller than one evaluation is possible. Never compare arms
+   "per iteration".
 2. **Trajectories live on the `cum_sa_calls` axis** (`*_traj.csv`, one row per
    incumbent change + a closing `final` row). Post-processing interpolates step
    functions onto a shared log grid; nothing joins on `trial_id` across arms.
@@ -195,9 +202,43 @@ and `slurm/`. Key invariants:
 4. The v2 space is defined once in `space_v2.py` and exposed to Optuna
    (define-by-run) and SMAC (ConfigSpace with `EqualsCondition`s). Keep the three
    views in sync if you change ranges.
-5. SMAC only runs on Linux (pyrfr). Local Windows smoke tests cover the Optuna
-   arms; always run `PROFILE=bovsrs_smoke bash slurm/submit_all.sh` on the VM
-   before the full 200-run submission.
+5. A resampling plan is fixed by run seed. Fixed-budget configurators evaluate
+   each proposal on that plan; SMAC-AAC receives weighted scenario-evaluation
+   units representing the same estimator. Canonical full-training validation is
+   analysis-only when a resampling method is active.
+6. SMAC only runs on Linux (pyrfr). Always run
+   `PROFILE=bovsrs_resampling_smoke bash slurm/run_local.sh` on the VM before the
+   192-run primary factorial submission.
+
+The complete training-size factorial is
+`configs/bovsrs_resampling_train_sizes.yaml`: 576 runs (4 configurators x 4
+resampling methods x n={10,25,50} x 12 paired seeds). It keeps the optimization
+cap fixed at 5,000 SA calls with per-condition `n_trials` values 500, 200, and
+100. Run `bovsrs_resampling_train_sizes_smoke` first (48 runs, equal 500-call
+caps). Both profiles reuse the v1 synthetic pools and best-known references at
+`/local/rohit/datasets/tsp`; do not regenerate a different dataset for them.
+
+The primary profile is `configs/bovsrs_resampling_signal.yaml`: 192 runs
+(4 configurators × 4 resampling methods × 12 paired seeds). The optional
+`bovsrs_resampling_conditions.yaml` profile has 512 runs across four targeted
+conditions and 8 seeds. Both launchers default to the primary factorial profile.
+Old `bovsrs_signal`/`bovsrs_conditions` outputs are configurator-only legacy data
+and must not be reported as the requested factorial experiment.
+
+`make_plots_v2.py` also writes all v1-named report figures using only the active
+v2 profile's `final_summary.csv` and `trajectories_grid.csv`. It additionally
+writes `optimizer_comparison.png` and four method-specific comparisons under
+`optimizer_comparison_by_resampling/`. The all-four-configurator equivalents are
+`configurator_comparison.png` and `configurator_comparison_by_resampling/`.
+The clearest simultaneous 4-configurator x 4-resampling views are
+`all_configurators_all_resamplings.png` and the paired full/zoomed
+`all_configurators_all_resamplings_ecdf_matrix.png`.
+For the three-size profile, the root also contains
+`overtuning_frequency_over_budget_by_train_size.png`,
+`relative_overtuning_over_budget_by_train_size.png`, and
+`relative_overtuning_eligibility_over_budget_by_train_size.png`; these are the
+complete n x resampling x configurator overtime comparisons.
+Never copy v1 CSVs into a v2 result root.
 
 ---
 
@@ -207,7 +248,9 @@ These are **not** implemented. No existing results need to be recomputed; the 72
 
 ### Statistical confidence
 - **More seeds (5 → 20):** update `configs/final.yaml` seeds list, re-run `run_final.sh`. No code changes. Stabilises the relative-overtuning vs. train-size curves and smooths the zoomed ECDF staircase.
-- **Significance testing:** add Wilcoxon signed-rank tests (or a small LMM mirroring the paper's Table 1) comparing resampling methods pairwise on final relative overtuning and generalisation gap. Would go in a new `scripts/statistics.py` script.
+- **Mixed-effects follow-up:** v2 now includes paired Wilcoxon tests with Holm
+  correction and bootstrap confidence intervals for resampling comparisons. A
+  mixed-effects model mirroring the paper's Table 1 remains optional.
 
 ### New experimental levers (paper-aligned)
 - **Reshuffling resampling splits:** at each BO trial, use a freshly drawn random split instead of fixed folds. Requires a new `ResamplingStrategy` subclass in `resampling.py` + a YAML key. Most direct extension of the paper's Section 6.
@@ -216,7 +259,6 @@ These are **not** implemented. No existing results need to be recomputed; the 72
 
 ### Figure improvements (cosmetic)
 - Add bootstrap CIs to the `generalization_gap_by_train_size.png` pointplot.
-- Add `iterations_per_temp` and `restarts` panels to `selected_params_stability.png`.
 
 ---
 

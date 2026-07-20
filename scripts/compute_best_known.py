@@ -14,7 +14,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n_cities", type=int, default=50)
     ap.add_argument("--n_starts", type=int, default=20)
-    ap.add_argument("--data_dir", default="/local/anmol/datasets/tsp")
+    ap.add_argument("--data_dir", default="/local/rohit/datasets/tsp")
     args = ap.parse_args()
 
     data_dir = Path(args.data_dir)

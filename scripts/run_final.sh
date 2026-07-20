@@ -5,7 +5,7 @@
 # file results/FINAL_COMPLETE when finished. No `set -e`: a single failed cell must not
 # abort the whole sweep (xargs returns nonzero if any cell fails).
 set -u
-REPO=/local/anmol/aac_tsp_overtuning
+REPO=/local/rohit/projects/aacnewtest
 cd "$REPO"
 PY="$REPO/.venv/bin/python"
 LOG="$REPO/results/final_run.log"

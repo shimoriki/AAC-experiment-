@@ -12,11 +12,21 @@ set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-.}"
 source .venv/bin/activate
 
-DATA_DIR="${DATA_DIR:-/local/anmol/datasets/tsp}"
+DATA_DIR="${DATA_DIR:-/local/rohit/datasets/tsp}"
 N_CITIES="${N_CITIES:-50}"
 
-if [ -f "$DATA_DIR/best_known/best_known.csv" ] && \
-   [ -f "$DATA_DIR/instances/mixed_${N_CITIES}_train.npz" ]; then
+DATASET_COMPLETE=1
+for FAMILY in uniform clustered mixed; do
+    for ROLE in train test; do
+        [ -r "$DATA_DIR/instances/${FAMILY}_${N_CITIES}_${ROLE}.npz" ] || DATASET_COMPLETE=0
+    done
+done
+BEST_KNOWN="$DATA_DIR/best_known/best_known.csv"
+[ -r "$BEST_KNOWN" ] || DATASET_COMPLETE=0
+if [ -r "$BEST_KNOWN" ] && [ "$(wc -l < "$BEST_KNOWN")" -lt 751 ]; then
+    DATASET_COMPLETE=0
+fi
+if [ "$DATASET_COMPLETE" -eq 1 ]; then
     echo "Dataset already present at $DATA_DIR - nothing to do."
     exit 0
 fi

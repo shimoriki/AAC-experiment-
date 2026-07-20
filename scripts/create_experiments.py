@@ -18,7 +18,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default="smoke", help="name of configs/<profile>.yaml")
     ap.add_argument("--out", default=str(REPO / "scripts" / "run_experiments.sh"))
-    ap.add_argument("--data_dir", default="/local/anmol/datasets/tsp")
+    ap.add_argument("--data_dir", default="/local/rohit/datasets/tsp")
     ap.add_argument("--out_dir", default=str(REPO / "results" / "raw"))
     args = ap.parse_args()
 

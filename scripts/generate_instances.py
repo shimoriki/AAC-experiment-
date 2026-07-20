@@ -11,7 +11,7 @@ def main():
     ap.add_argument("--n_cities", type=int, default=50)
     ap.add_argument("--n_train_pool", type=int, default=150)
     ap.add_argument("--n_test", type=int, default=100)
-    ap.add_argument("--data_dir", default="/local/anmol/datasets/tsp")
+    ap.add_argument("--data_dir", default="/local/rohit/datasets/tsp")
     args = ap.parse_args()
 
     manifest = generate_all(Path(args.data_dir), args.n_cities, args.n_train_pool, args.n_test)

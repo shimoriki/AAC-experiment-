@@ -17,15 +17,47 @@ RESAMPLING_ORDER = ["holdout", "cv5", "repeated_cv5", "bootstrap_oob"]
 # Readable names for the report/figures. Keys stay as-is in code/CSVs; these are
 # display-only. "cv5" is 5-fold *instance* resampling, not model cross-validation.
 RESAMPLING_LABELS = {
-    "holdout": "holdout",
+    "holdout": "Holdout instance sampling",
     "cv5": "5-fold instance resampling",
-    "repeated_cv5": "repeated 5-fold instance resampling",
-    "bootstrap_oob": "bootstrap OOB",
+    "repeated_cv5": "Repeated 5-fold instance resampling",
+    "bootstrap_oob": "Bootstrap OOB instance resampling",
+}
+RESAMPLING_COLORS = {
+    "holdout": "#d55e00",
+    "cv5": "#0072b2",
+    "repeated_cv5": "#009e73",
+    "bootstrap_oob": "#cc79a7",
 }
 
 
 def _present(values, order):
     return [v for v in order if v in set(values)]
+
+
+def _label_resampling(df: pd.DataFrame) -> pd.DataFrame:
+    """Add report-facing method names without changing stored CSV keys."""
+    labelled = df.copy()
+    labelled["resampling_method"] = labelled["resampling"].map(
+        lambda value: RESAMPLING_LABELS.get(value, value)
+    )
+    return labelled
+
+
+def _label_order(keys: list[str]) -> list[str]:
+    return [RESAMPLING_LABELS.get(key, key) for key in keys]
+
+
+def _label_palette(keys: list[str]) -> dict[str, str]:
+    return {
+        RESAMPLING_LABELS.get(key, key): RESAMPLING_COLORS.get(key, "#777777")
+        for key in keys
+    }
+
+
+def _rotate_method_ticks(ax, angle: int = 22):
+    ax.tick_params(axis="x", rotation=angle)
+    for tick in ax.get_xticklabels():
+        tick.set_horizontalalignment("right")
 
 
 def plot_trajectory(traj: pd.DataFrame, out: Path):
@@ -38,7 +70,7 @@ def plot_trajectory(traj: pd.DataFrame, out: Path):
     fig, ax = plt.subplots(figsize=(9, 6))
     ax.plot(d["trial_id"], d["val_t"], label="validation incumbent", lw=2.5)
     ax.plot(d["trial_id"], d["test_t"], label="test (same-distribution)", lw=2.5)
-    ax.set_xlabel("BO iteration")
+    ax.set_xlabel("configurator iteration")
     ax.set_ylabel("normalized cost (gap)")
     ax.set_title(f"Validation vs test incumbent\n{pick}")
     ax.legend()
@@ -66,90 +98,381 @@ def plot_ecdf_relative_overtuning(traj: pd.DataFrame, out: Path):
             if len(vals) == 0:
                 continue
             y = np.arange(1, len(vals) + 1) / len(vals)
-            ax.step(vals, y, where="post", label=RESAMPLING_LABELS.get(r, r), lw=2.5)
-        ax.axvline(1.0, color="k", ls="--", lw=1.5, label="all progress lost (=1)")
+            ax.step(
+                vals,
+                y,
+                where="post",
+                label=RESAMPLING_LABELS.get(r, r),
+                color=RESAMPLING_COLORS.get(r),
+                lw=2.5,
+            )
+        ax.axvline(
+            1.0,
+            color="k",
+            ls="--",
+            lw=1.5,
+            label="100% of tuning progress lost (= 1)",
+        )
         ax.set_xlabel("relative overtuning")
         ax.set_ylabel("proportion of runs")
         if zoomed:
             ax.set_ylim(0.88, 1.005)
-            ax.set_title("ECDF — zoomed (y ≥ 0.88)\nshows resampling separation")
+            ax.set_title("ECDF — zoomed (y ≥ 0.88)\nshows method separation")
         else:
-            ax.set_title("ECDF — full scale\nshows heavy tail of holdout")
-        ax.legend(fontsize=11)
+            ax.set_title("ECDF — full scale\nshows the complete overtuning tail")
+        ax.legend(fontsize=9)
 
-    fig.suptitle("ECDF of relative overtuning by resampling", fontsize=14)
+    fig.suptitle("ECDF of relative overtuning by instance-resampling method", fontsize=14)
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     plt.close(fig)
 
 
 def plot_final_test_by_resampling(summary: pd.DataFrame, out: Path):
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(12, 7))
     order = _present(summary["resampling"], RESAMPLING_ORDER)
-    sns.boxplot(data=summary, x="resampling", y="final_test_cost", order=order, ax=ax)
-    sns.stripplot(data=summary, x="resampling", y="final_test_cost", order=order,
-                  color="0.25", size=4, alpha=0.5, ax=ax)
-    ax.set_xlabel("resampling")
+    labelled = _label_resampling(summary)
+    label_order = _label_order(order)
+    sns.boxplot(
+        data=labelled,
+        x="resampling_method",
+        y="final_test_cost",
+        order=label_order,
+        palette=_label_palette(order),
+        hue="resampling_method",
+        legend=False,
+        ax=ax,
+    )
+    sns.stripplot(
+        data=labelled,
+        x="resampling_method",
+        y="final_test_cost",
+        order=label_order,
+        color="0.20",
+        size=3,
+        alpha=0.35,
+        ax=ax,
+    )
+    ax.set_xlabel("instance-resampling method")
     ax.set_ylabel("final test cost (gap)")
-    ax.set_title("Final test performance by resampling")
+    ax.set_title("Final test performance by instance-resampling method")
+    _rotate_method_ticks(ax)
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     plt.close(fig)
 
 
 def plot_gap_by_train_size(summary: pd.DataFrame, out: Path):
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(12, 7))
     order = _present(summary["resampling"], RESAMPLING_ORDER)
-    sns.pointplot(data=summary, x="train_size", y="final_generalization_gap",
-                  hue="resampling", hue_order=order, dodge=0.3, ax=ax, errorbar="sd")
+    labelled = _label_resampling(summary)
+    sns.pointplot(
+        data=labelled,
+        x="train_size",
+        y="final_generalization_gap",
+        hue="resampling_method",
+        hue_order=_label_order(order),
+        palette=_label_palette(order),
+        dodge=0.3,
+        ax=ax,
+        errorbar="se",
+    )
     ax.set_xlabel("training-pool size")
     ax.set_ylabel("generalization gap (test - validation)")
     ax.set_title("Generalization gap vs training size")
-    ax.legend(title="resampling", fontsize=12)
+    ax.legend(title="instance-resampling method", fontsize=10)
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     plt.close(fig)
 
 
 def plot_runtime_by_resampling(summary: pd.DataFrame, out: Path):
-    fig, ax = plt.subplots(figsize=(9, 6))
+    fig, ax = plt.subplots(figsize=(12, 7))
     order = _present(summary["resampling"], RESAMPLING_ORDER)
-    sns.barplot(data=summary, x="resampling", y="total_validation_runtime_sec",
-                order=order, errorbar="sd", ax=ax)
-    ax.set_xlabel("resampling")
+    labelled = _label_resampling(summary)
+    sns.barplot(
+        data=labelled,
+        x="resampling_method",
+        y="total_validation_runtime_sec",
+        order=_label_order(order),
+        palette=_label_palette(order),
+        hue="resampling_method",
+        legend=False,
+        errorbar="se",
+        ax=ax,
+    )
+    ax.set_xlabel("instance-resampling method")
     ax.set_ylabel("total validation runtime per run (s)")
-    ax.set_title("Computational cost by resampling")
+    ax.set_title("Computational cost by instance-resampling method")
+    _rotate_method_ticks(ax)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+
+def plot_trajectories_by_resampling(traj: pd.DataFrame, out: Path):
+    """Mean incumbent trajectories for all four instance-resampling methods."""
+    order = _present(traj["resampling"], RESAMPLING_ORDER)
+    fig, axes = plt.subplots(1, 2, figsize=(17, 7), sharex=True)
+    for ax, metric, ylabel, title in [
+        (axes[0], "val_t", "mean incumbent validation cost", "Validation trajectory"),
+        (axes[1], "test_t", "mean incumbent test cost", "Unseen-test trajectory"),
+    ]:
+        for method in order:
+            curve = (
+                traj.loc[traj["resampling"] == method]
+                .groupby("trial_id")[metric]
+                .agg(["mean", "sem"])
+                .sort_index()
+            )
+            x = curve.index.to_numpy(dtype=float)
+            mean = curve["mean"].to_numpy(dtype=float)
+            sem = curve["sem"].fillna(0.0).to_numpy(dtype=float)
+            color = RESAMPLING_COLORS.get(method)
+            ax.plot(
+                x,
+                mean,
+                color=color,
+                lw=2.5,
+                label=RESAMPLING_LABELS.get(method, method),
+            )
+            ax.fill_between(x, mean - sem, mean + sem, color=color, alpha=0.14)
+        ax.set_xlabel("configurator iteration")
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"{title}\nmean ± standard error across runs")
+        ax.legend(title="instance-resampling method", fontsize=9)
+    fig.suptitle("Incumbent trajectories by instance-resampling method", fontsize=16)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+
+def plot_relative_overtuning_by_train_size(summary: pd.DataFrame, out: Path):
+    """Eligible final relative overtuning as the training-instance pool grows."""
+    data = summary.dropna(subset=["final_relative_overtuning"]).copy()
+    if data.empty:
+        return
+    order = _present(data["resampling"], RESAMPLING_ORDER)
+    data = _label_resampling(data)
+    fig, ax = plt.subplots(figsize=(12, 7))
+    sns.pointplot(
+        data=data,
+        x="train_size",
+        y="final_relative_overtuning",
+        hue="resampling_method",
+        hue_order=_label_order(order),
+        palette=_label_palette(order),
+        dodge=0.3,
+        errorbar="se",
+        ax=ax,
+    )
+    ax.axhline(1.0, color="black", ls="--", lw=1.3, label="all progress lost (= 1)")
+    ax.set_xlabel("training-pool size")
+    ax.set_ylabel("final relative overtuning")
+    ax.set_title(
+        "Relative overtuning vs training size\n"
+        "reported only for runs with sufficient test-side progress"
+    )
+    ax.legend(title="instance-resampling method", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+
+def plot_overtuning_frequency(summary: pd.DataFrame, out: Path):
+    """Compare overtuning-event rates and relative-metric eligibility."""
+    metric_labels = {
+        "is_final_overtuned": "Final incumbent overtuned",
+        "is_severe_overtuning": "All progress lost (relative ≥ 1)",
+        "relative_overtuning_eligible": "Relative metric eligible",
+    }
+    columns = [column for column in metric_labels if column in summary.columns]
+    if not columns:
+        return
+    order = _present(summary["resampling"], RESAMPLING_ORDER)
+    data = _label_resampling(summary)
+    long = data.melt(
+        id_vars=["resampling_method"],
+        value_vars=columns,
+        var_name="metric",
+        value_name="indicator",
+    )
+    long["indicator"] = long["indicator"].astype(float)
+    long["outcome"] = long["metric"].map(metric_labels)
+    fig, ax = plt.subplots(figsize=(14, 8))
+    sns.barplot(
+        data=long,
+        x="resampling_method",
+        y="indicator",
+        hue="outcome",
+        order=_label_order(order),
+        errorbar="se",
+        ax=ax,
+    )
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("instance-resampling method")
+    ax.set_ylabel("proportion of runs")
+    ax.set_title("Overtuning outcomes by instance-resampling method")
+    ax.legend(title="run-level outcome", fontsize=10)
+    _rotate_method_ticks(ax)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+
+def plot_resampling_tradeoff(summary: pd.DataFrame, out: Path):
+    """Show validation-evaluation cost against two generalization outcomes."""
+    order = _present(summary["resampling"], RESAMPLING_ORDER)
+    fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+    outcomes = [
+        ("final_generalization_gap", "mean generalization gap", "Runtime vs generalization gap"),
+        ("final_relative_overtuning", "mean final relative overtuning", "Runtime vs relative overtuning"),
+    ]
+    for ax, (outcome, ylabel, title) in zip(axes, outcomes):
+        plotted = False
+        for method in order:
+            sub = summary.loc[summary["resampling"] == method, [
+                "total_validation_runtime_sec", outcome
+            ]].dropna()
+            if sub.empty:
+                continue
+            x = float(sub["total_validation_runtime_sec"].mean())
+            y = float(sub[outcome].mean())
+            xerr = float(sub["total_validation_runtime_sec"].sem()) if len(sub) > 1 else 0.0
+            yerr = float(sub[outcome].sem()) if len(sub) > 1 else 0.0
+            color = RESAMPLING_COLORS.get(method)
+            ax.errorbar(
+                x,
+                y,
+                xerr=xerr,
+                yerr=yerr,
+                fmt="o",
+                ms=10,
+                capsize=4,
+                color=color,
+                label=RESAMPLING_LABELS.get(method, method),
+            )
+            plotted = True
+        if plotted:
+            ax.set_xscale("log")
+            ax.set_xlabel("mean validation runtime per run (s, log scale)")
+            ax.set_ylabel(ylabel)
+            ax.set_title(f"{title}\npoints show mean ± standard error")
+            ax.legend(title="instance-resampling method", fontsize=8)
+        else:
+            ax.axis("off")
+            ax.text(0.5, 0.5, f"No eligible data for {ylabel}", ha="center", va="center")
+    fig.suptitle("Quality–cost trade-off of instance-resampling methods", fontsize=16)
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     plt.close(fig)
 
 
 def plot_param_stability(raw_dir: Path, out: Path):
-    """Distribution of selected SA parameters of the final incumbent, across seeds."""
+    """Compare every selected v1 SA parameter across instance-resampling methods."""
     rows = []
     for csv_path in sorted(Path(raw_dir).glob("*.csv")):
         df = pd.read_csv(csv_path)
-        if not len(df):
+        if not len(df) or "validation_cost" not in df.columns:
             continue
         inc = df.loc[df["validation_cost"].idxmin()]
         rows.append(inc)
     if not rows:
         return
-    sel = pd.DataFrame(rows)
+    # Each selected Series is named by its original trial index. Resetting avoids
+    # duplicate row labels when several runs select the same trial number.
+    sel = _label_resampling(pd.DataFrame(rows).reset_index(drop=True))
     order = _present(sel["resampling"], RESAMPLING_ORDER)
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    sns.boxplot(data=sel, x="resampling", y="cooling_rate", order=order, ax=axes[0])
-    axes[0].set_title("cooling_rate")
-    sns.boxplot(data=sel, x="resampling", y="initial_temperature", order=order, ax=axes[1])
-    axes[1].set_yscale("log")
-    axes[1].set_title("initial_temperature")
-    sns.countplot(data=sel, x="move_type", hue="resampling", hue_order=order, ax=axes[2])
-    axes[2].set_title("move_type")
-    for a in axes:
-        a.set_xlabel("")
-        a.tick_params(axis="x", rotation=30)
-    fig.suptitle("Selected-configuration stability across seeds")
-    fig.tight_layout()
+    label_order = _label_order(order)
+    palette = _label_palette(order)
+    fig, axes = plt.subplots(2, 3, figsize=(24, 14))
+
+    numeric = [
+        ("initial_temperature", "Initial temperature", True),
+        ("cooling_rate", "Cooling rate", False),
+        ("iterations_per_temp", "Iterations per temperature", False),
+        ("restarts", "Restarts", False),
+    ]
+    for ax, (column, title, log_scale) in zip(axes.flat[:4], numeric):
+        sns.boxplot(
+            data=sel,
+            x="resampling_method",
+            y=column,
+            order=label_order,
+            palette=palette,
+            hue="resampling_method",
+            legend=False,
+            showfliers=False,
+            ax=ax,
+        )
+        sns.stripplot(
+            data=sel,
+            x="resampling_method",
+            y=column,
+            order=label_order,
+            color="0.15",
+            alpha=0.25,
+            size=2.5,
+            jitter=0.22,
+            ax=ax,
+        )
+        if log_scale:
+            ax.set_yscale("log")
+        ax.set_title(title)
+        ax.set_xlabel("")
+        _rotate_method_ticks(ax, angle=20)
+
+    move_ax = axes.flat[4]
+    move_order = [m for m in ["swap", "insert", "2opt"] if m in set(sel["move_type"])]
+    shares = pd.crosstab(
+        sel["resampling_method"], sel["move_type"], normalize="index"
+    ).reindex(index=label_order, columns=move_order, fill_value=0.0)
+    shares.plot(
+        kind="bar",
+        stacked=True,
+        color={"swap": "#e69f00", "insert": "#56b4e9", "2opt": "#009e73"},
+        width=0.78,
+        ax=move_ax,
+    )
+    move_ax.set_ylim(0, 1)
+    move_ax.set_ylabel("proportion of selected incumbents")
+    move_ax.set_xlabel("")
+    move_ax.set_title("Move-type selection")
+    move_ax.legend(title="move type", fontsize=10)
+    _rotate_method_ticks(move_ax, angle=20)
+
+    effect_ax = axes.flat[5]
+    if sel["move_type"].nunique() > 1 and sel["test_cost"].notna().any():
+        sns.boxplot(
+            data=sel,
+            x="move_type",
+            y="test_cost",
+            hue="resampling_method",
+            hue_order=label_order,
+            palette=palette,
+            showfliers=False,
+            ax=effect_ax,
+        )
+        effect_ax.set_xlabel("selected move type")
+        effect_ax.set_ylabel("final test cost (gap)")
+        effect_ax.set_title("Move type and final test performance")
+        effect_ax.legend(title="instance-resampling method", fontsize=8)
+    else:
+        effect_ax.axis("off")
+        effect_ax.text(
+            0.5,
+            0.55,
+            "Move type is fixed to 2-opt\nin this configuration-space variant.",
+            ha="center",
+            va="center",
+            fontsize=16,
+        )
+
+    fig.suptitle(
+        "Selected SA parameter comparisons across instance-resampling methods",
+        fontsize=18,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(out, dpi=150)
     plt.close(fig)
 
@@ -183,6 +506,57 @@ def plot_composition_heatmap(summary: pd.DataFrame, out: Path):
     plt.close(fig)
 
 
+def plot_composition_by_resampling(summary: pd.DataFrame, out: Path):
+    """Distribution-shift heatmaps separated by instance-resampling method."""
+    families = ["uniform", "clustered", "mixed"]
+    order = _present(summary["resampling"], RESAMPLING_ORDER)
+    matrices: dict[str, np.ndarray] = {}
+    for method in order:
+        matrix = np.full((len(families), len(families)), np.nan)
+        method_data = summary[summary["resampling"] == method]
+        for i, train_family in enumerate(families):
+            cell_rows = method_data[method_data["train_family"] == train_family]
+            for j, test_family in enumerate(families):
+                column = f"test_t_{test_family}"
+                if column in cell_rows and not cell_rows.empty:
+                    matrix[i, j] = cell_rows[column].mean()
+        matrices[method] = matrix
+    if not matrices:
+        return
+
+    finite = np.concatenate([m[np.isfinite(m)] for m in matrices.values()])
+    vmin = float(finite.min()) if len(finite) else None
+    vmax = float(finite.max()) if len(finite) else None
+    fig, axes = plt.subplots(2, 2, figsize=(15, 13), sharex=True, sharey=True)
+    for index, (ax, method) in enumerate(zip(axes.flat, order)):
+        sns.heatmap(
+            matrices[method],
+            annot=True,
+            fmt=".4f",
+            xticklabels=families,
+            yticklabels=families,
+            cmap="viridis",
+            vmin=vmin,
+            vmax=vmax,
+            cbar=index == len(order) - 1,
+            cbar_kws={"label": "mean final test cost"},
+            ax=ax,
+        )
+        ax.set_title(RESAMPLING_LABELS.get(method, method))
+        ax.set_xlabel("test family")
+        ax.set_ylabel("train family")
+    for ax in axes.flat[len(order):]:
+        ax.axis("off")
+    fig.suptitle(
+        "Composition / distribution shift by instance-resampling method\n"
+        "cells show mean final test cost (not generalization gap)",
+        fontsize=16,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+
+
 def plot_optimizer_comparison(traj: pd.DataFrame, summary: pd.DataFrame, out: Path):
     """TPE vs Random Search: convergence curves (full + zoomed) + final test cost.
 
@@ -211,7 +585,7 @@ def plot_optimizer_comparison(traj: pd.DataFrame, summary: pd.DataFrame, out: Pa
     for opt in optimizers:
         c = curves[opt]
         ax0.plot(c.index, c.values, label=OPTIMIZER_LABELS[opt], lw=2.5, color=colors[opt])
-    ax0.set_xlabel("BO iteration")
+    ax0.set_xlabel("configurator iteration")
     ax0.set_ylabel("mean test cost (gap)")
     ax0.set_title("Convergence — full scale\n(shows initial random spike)")
     ax0.legend(fontsize=11)
@@ -223,7 +597,7 @@ def plot_optimizer_comparison(traj: pd.DataFrame, summary: pd.DataFrame, out: Pa
         c_zoom = c[c.index >= 2]
         ax1.plot(c_zoom.index, c_zoom.values, label=OPTIMIZER_LABELS[opt], lw=2.5,
                  color=colors[opt])
-    ax1.set_xlabel("BO iteration")
+    ax1.set_xlabel("configurator iteration")
     ax1.set_ylabel("mean test cost (gap)")
     ax1.set_title("Convergence — zoomed (iter ≥ 2)\nshows TPE vs RS separation")
     ax1.legend(fontsize=11)
@@ -243,10 +617,10 @@ def plot_optimizer_comparison(traj: pd.DataFrame, summary: pd.DataFrame, out: Pa
                 palette={"Bayesian Opt. (TPE)": colors["optuna_tpe"],
                          "Random Search": colors["random"]},
                 ax=ax2)
-    ax2.set_xlabel("")
+    ax2.set_xlabel("instance-resampling method")
     ax2.set_ylabel("final test cost (gap)")
     ax2.set_title("Final test cost: TPE vs Random Search")
-    ax2.tick_params(axis="x", rotation=30)
+    _rotate_method_ticks(ax2, angle=22)
     ax2.legend(title="optimizer", fontsize=11)
 
     fig.suptitle("Bayesian Optimization (TPE) vs Random Search baseline", fontsize=14)
@@ -268,11 +642,17 @@ def make_all(processed_dir: Path, summaries_dir: Path, raw_dir: Path, fig_dir: P
         produced.append(path)
 
     _do(plot_trajectory, "trajectory_validation_vs_test.png", traj)
+    _do(plot_trajectories_by_resampling, "trajectories_by_resampling.png", traj)
     _do(plot_ecdf_relative_overtuning, "ecdf_relative_overtuning.png", traj)
+    _do(plot_relative_overtuning_by_train_size,
+        "relative_overtuning_by_train_size.png", summary)
+    _do(plot_overtuning_frequency, "overtuning_frequency_by_resampling.png", summary)
     _do(plot_final_test_by_resampling, "final_test_by_resampling.png", summary)
     _do(plot_gap_by_train_size, "generalization_gap_by_train_size.png", summary)
     _do(plot_runtime_by_resampling, "runtime_by_resampling.png", summary)
+    _do(plot_resampling_tradeoff, "resampling_quality_runtime_tradeoff.png", summary)
     _do(plot_param_stability, "selected_params_stability.png", raw_dir)
     _do(plot_composition_heatmap, "composition_heatmap.png", summary)
+    _do(plot_composition_by_resampling, "composition_by_resampling.png", summary)
     _do(plot_optimizer_comparison, "optimizer_comparison.png", traj, summary)
     return produced

@@ -21,13 +21,26 @@
 
 ---
 
-> **Experiment v2 — configurator comparison at scale (BO vs RS vs SMAC).**
-> A scaled-up follow-up experiment now lives alongside v1: 4 configurators
-> (Random Search, Optuna TPE, SMAC fixed-budget, SMAC with native intensification),
-> a 15-parameter configuration space, 250-proposal budgets, 25 seeds, equal total
-> target-algorithm budget across arms, SLURM job scripts, and 14 comparison
-> figures with paired significance tests. See **[EXPERIMENT_V2.md](EXPERIMENT_V2.md)**;
-> run it on the VM with `bash slurm/submit_all.sh`.
+> **Experiment v2 — configurator × instance-resampling comparison.**
+> The primary new experiment crosses 4 configurators (Random Search, Optuna TPE,
+> SMAC-BO, SMAC-AAC) with all 4 instance-resampling methods at equal SA-call
+> caps: 192 runs with 12 matched seeds. An optional 512-run profile adds
+> targeted training-size, family, and 11-vs-15-parameter-space conditions.
+> The complete training-size extension is
+> `bovsrs_resampling_train_sizes`: 576 runs crossing the same 4 configurators
+> and 4 instance-resampling methods at n=10, 25, and 50 with 12 matched seeds.
+> Every size receives the same 5,000 optimization-SA-call cap.
+> Its plotting stage regenerates every v1-style report graph from the new v2
+> results only, plus overall and per-resampling comparisons for TPE-vs-Random
+> and for all four configurators together. The headline
+> `all_configurators_all_resamplings*.png` figures show every one of the 16
+> configurator-resampling cells simultaneously.
+> See **[EXPERIMENT_V2.md](EXPERIMENT_V2.md)** and
+> **[EXPERIMENT_COVERAGE.md](EXPERIMENT_COVERAGE.md)**;
+> smoke-test with `PROFILE=bovsrs_resampling_smoke bash slurm/run_local.sh`, then
+> run `PROFILE=bovsrs_resampling_train_sizes_smoke bash slurm/run_local.sh`
+> before the full `PROFILE=bovsrs_resampling_train_sizes bash slurm/run_local.sh`
+> job on the VM.
 
 ---
 
@@ -55,10 +68,10 @@ The four estimators compared, in order of decreasing variance:
 
 | Code key | Report name | Description |
 |---|---|---|
-| `holdout` | holdout | Fixed 20 % validation subset |
+| `holdout` | Holdout instance sampling | Fixed 20 % validation subset |
 | `cv5` | 5-fold instance resampling | 5-fold split over training instances |
-| `repeated_cv5` | repeated 5-fold instance resampling | 3 × 5-fold with different splits |
-| `bootstrap_oob` | bootstrap OOB | 10 bootstrap resamples; OOB instances are validation |
+| `repeated_cv5` | Repeated 5-fold instance resampling | 3 × 5-fold with different splits |
+| `bootstrap_oob` | Bootstrap OOB instance resampling | 10 bootstrap resamples; OOB instances are validation |
 
 The optimizer sees **only** `validation_cost`. `test_cost` is logged for analysis and never fed back to the optimizer.
 
@@ -75,7 +88,9 @@ Synthetic TSP instances, generated with fixed seeds — full control over size, 
 | `mixed` | — | Blend of uniform and clustered points |
 
 **Scale:** 50 cities, 150 training instances + 100 test instances per family.
-Stored under `/local/anmol/datasets/tsp/` (not committed to this repo due to size; regenerate with the script below).
+Stored under `/local/rohit/datasets/tsp/` (not committed to this repo due to size; regenerate with the script below).
+Both v1 and v2 load these exact pool files and the same `best_known.csv`; the
+v2 launcher only generates them when the shared dataset is missing or incomplete.
 
 Performance metric — normalised tour gap:
 ```
@@ -108,7 +123,7 @@ Requires Python ≥ 3.10. No GPU needed.
 
 ```bash
 git clone <this-repo>
-cd aac_tsp_overtuning
+cd /local/rohit/projects/aacnewtest
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -120,7 +135,7 @@ pip install -e .
 ### Regenerate instances and best-known references
 
 ```bash
-# Creates /local/anmol/datasets/tsp/ (or change --data_dir)
+# Creates /local/rohit/datasets/tsp/ (or change --data_dir)
 python scripts/generate_instances.py --n_cities 50 --n_train_pool 150 --n_test 100
 python scripts/compute_best_known.py --n_cities 50 --n_starts 20
 ```
@@ -213,27 +228,40 @@ results/
   FINAL_COMPLETE   (sentinel; appears when run_final.sh finishes)
 
 figures/
-  full/            8 figures — full config space (generalization gap + overtuning story)
-  fixed_2opt/      8 figures — fixed_2opt (ECDF + optimizer comparison headline figures)
+  full/            13 figures — full config space (generalization gap + overtuning story)
+  fixed_2opt/      13 figures — fixed_2opt (ECDF + optimizer comparison headline figures)
   pilot/           7 figures from the initial 54-run pilot (reference only)
 ```
 
-The 8 figures produced per variant:
+The 13 figures produced per variant use the report-facing names “Holdout instance
+sampling”, “5-fold instance resampling”, “Repeated 5-fold instance resampling”,
+and “Bootstrap OOB instance resampling”. The CSV/code keys remain unchanged for
+backward compatibility.
 
 | Filename | What it shows |
 |---|---|
-| `trajectory_validation_vs_test.png` | Validation vs test incumbent over BO iterations |
-| `ecdf_relative_overtuning.png` | ECDF of relative overtuning by resampling — two panels: full scale (heavy tail) + zoomed y ≥ 0.88 (resampling separation) |
-| `final_test_by_resampling.png` | Boxplot of final test cost by resampling |
-| `generalization_gap_by_train_size.png` | Gap vs training pool size by resampling |
-| `runtime_by_resampling.png` | Computational cost per resampling method |
-| `selected_params_stability.png` | Distribution of selected SA params across seeds |
+| `trajectory_validation_vs_test.png` | Validation vs test incumbent for one illustrative run |
+| `trajectories_by_resampling.png` | Mean validation and unseen-test trajectories for all four instance-resampling methods, with standard-error ribbons |
+| `ecdf_relative_overtuning.png` | ECDF of relative overtuning — full scale plus paper-style zoom at y ≥ 0.88 |
+| `relative_overtuning_by_train_size.png` | Eligible final relative overtuning vs training-pool size |
+| `overtuning_frequency_by_resampling.png` | Final overtuning, severe overtuning, and relative-metric eligibility rates |
+| `final_test_by_resampling.png` | Boxplot of final test cost by instance-resampling method |
+| `generalization_gap_by_train_size.png` | Gap vs training-pool size by instance-resampling method |
+| `runtime_by_resampling.png` | Computational cost per instance-resampling method |
+| `resampling_quality_runtime_tradeoff.png` | Runtime against generalization gap and relative overtuning |
+| `selected_params_stability.png` | All five selected SA parameters: four numeric distributions, move-type proportions, and move-type/test-cost relation |
 | `composition_heatmap.png` | Train-family × test-family mean final **test cost** (not gap); shows test-family difficulty dominates, not train↔test match |
+| `composition_by_resampling.png` | The same train-family × test-family analysis split into one panel per instance-resampling method |
 | `optimizer_comparison.png` | TPE vs Random Search — three panels: full-scale convergence, zoomed convergence (iter ≥ 2), final test cost boxplot |
 
 **Per-run CSV columns:** `trial_id`, `optimizer`, `config_space`, `resampling`, `train_family`, `train_size`, `seed`, SA parameters, `validation_cost`, `test_cost`, `test_cost_{uniform,clustered,mixed}`, `is_incumbent`, runtimes.
 
-**Trajectory CSV columns:** `val_t` (non-increasing incumbent validation cost), `test_t`, `generalization_gap_t`, `overtuning_t`, `relative_overtuning_t`.
+**Trajectory CSV columns:** `val_t` (non-increasing incumbent validation cost),
+`test_t`, `generalization_gap_t`, `overtuning_t`, test progress from the initial
+incumbent, raw relative overtuning, its eligibility flag, and the reported
+`relative_overtuning_t`. Following Schneider et al. Section 5, the reported
+relative metric is `NaN` when test progress is below 0.001; the raw value remains
+available for auditing.
 
 ---
 
@@ -241,25 +269,25 @@ The 8 figures produced per variant:
 
 Results from the full final experiment (720 runs: 2 config spaces × 2 optimizers × 4 resamplings × 3 families × 3 train sizes × 5 seeds).
 
-### Full config space — generalisation gap by resampling
+### Full config space — generalisation gap by instance-resampling method
 
 | Resampling | Mean gap | Proportion of runs with overtuning | Mean runtime / run (s) |
 |---|---|---|---|
-| holdout | **0.0066** | **16.2 %** | 2.2 |
-| cv5 (5-fold instance resampling) | 0.0018 | 12.3 % | 10.3 |
-| repeated_cv5 | 0.0006 | 7.7 % | 30.7 |
-| bootstrap OOB | 0.0006 | 5.8 % | 37.5 |
+| Holdout instance sampling | **0.0066** | **16.2 %** | 2.2 |
+| 5-fold instance resampling | 0.0018 | 12.3 % | 10.3 |
+| Repeated 5-fold instance resampling | 0.0006 | 7.7 % | 30.7 |
+| Bootstrap OOB instance resampling | 0.0006 | 5.8 % | 37.5 |
 
-Holdout has the largest generalisation gap and the most overtuning events. Stronger estimators (repeated CV, bootstrap OOB) nearly eliminate the gap, at a runtime cost of ~14–17×.
+Holdout instance sampling has the largest generalisation gap and the most overtuning events. Stronger estimators (repeated 5-fold instance resampling and Bootstrap OOB instance resampling) nearly eliminate the gap, at a runtime cost of ~14–17×.
 
-### Fixed_2opt config space — relative overtuning by resampling (ECDF headline)
+### Fixed_2opt config space — relative overtuning by instance-resampling method (ECDF headline)
 
 | Resampling | Mean relative overtuning | Proportion with overtuning |
 |---|---|---|
-| holdout | **0.137** | **25.2 %** |
-| cv5 | 0.039 | 17.8 % |
-| bootstrap OOB | 0.055 | 17.2 % |
-| repeated_cv5 | **0.035** | **16.2 %** |
+| Holdout instance sampling | **0.137** | **25.2 %** |
+| 5-fold instance resampling | 0.039 | 17.8 % |
+| Bootstrap OOB instance resampling | 0.055 | 17.2 % |
+| Repeated 5-fold instance resampling | **0.035** | **16.2 %** |
 
 Fixing the move type reveals the relative-overtuning signal: holdout overshoots the optimal configuration by 13.7 % on average; repeated 5-fold instance resampling reduces this to 3.5 %.
 
@@ -293,11 +321,11 @@ With only 10 training instances and holdout, a single validation subset may cont
 
 ### 3. Repeated resampling pays off — but only meaningfully at n ≥ 25
 
-Repeated 5-fold instance resampling (3 repetitions) reduces the mean relative overtuning from **13.7% (holdout) to 3.5%**, the best of all methods tested. However, the gain over a single 5-fold pass is modest unless the training pool is large enough that different folds actually see different instance structure. At n=10, repeated CV and bootstrap OOB perform similarly to single CV.
+Repeated 5-fold instance resampling (3 repetitions) reduces the mean relative overtuning from **13.7% (holdout) to 3.5%**, the best of all methods tested. However, the gain over a single 5-fold instance-resampling pass is modest unless the training pool is large enough that different folds actually see different instance structure. At n=10, repeated 5-fold instance resampling and Bootstrap OOB instance resampling perform similarly to one 5-fold pass.
 
 ### 4. Bootstrap OOB is not worth the cost at moderate training sizes
 
-Bootstrap OOB costs ~14–17× as much as holdout per BO run, similar to repeated CV, but it does not outperform repeated 5-fold instance resampling in our experiments. Use it only if you have a strong prior that out-of-bag coverage is more representative than fold coverage for your instance distribution.
+Bootstrap OOB instance resampling costs ~14–17× as much as holdout per BO run, similar to repeated 5-fold instance resampling, but it does not outperform the repeated-fold method in our experiments. Use it only if you have a strong prior that out-of-bag coverage is more representative than fold coverage for your instance distribution.
 
 ### 5. A mixed training pool is a safe default, but train-family choice barely mattered here
 
@@ -305,7 +333,7 @@ In this TSP+SA experiment, the choice of training instance family had negligible
 
 ### 6. More training instances always help — but with diminishing returns
 
-Across all resampling methods, the generalization gap at n=50 was roughly half the gap at n=10. The sharpest drop is from n=10 to n=25; the marginal benefit of going from n=25 to n=50 is smaller. For practical configuration budgets, **n=25 with 5-fold instance resampling** is a reasonable operating point: it achieves near-CV-50 quality at a fraction of the evaluation cost.
+Across all resampling methods, the generalization gap at n=50 was roughly half the gap at n=10. The sharpest drop is from n=10 to n=25; the marginal benefit of going from n=25 to n=50 is smaller. For practical configuration budgets, **n=25 with 5-fold instance resampling** is a reasonable operating point: it approaches the quality of the same estimator at n=50 at a fraction of the evaluation cost.
 
 ### 7. Use Bayesian Optimization — Random Search does not scale
 
@@ -363,7 +391,6 @@ These items are out of scope for the preliminary result presentation but are can
 ### Figure improvements (cosmetic / report-quality)
 - The relative-overtuning ECDF still has a noisy staircase in the zoomed panel (too few runs). More seeds (above) would smooth it significantly.
 - Add confidence ribbons (bootstrap CI) to the `generalization_gap_by_train_size.png` pointplot.
-- `selected_params_stability.png`: add `iterations_per_temp` and `restarts` panels (currently only `cooling_rate`, `initial_temperature`, `move_type`).
 
 ---
 

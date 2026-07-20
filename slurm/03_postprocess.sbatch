@@ -15,6 +15,12 @@ source .venv/bin/activate
 
 RESULTS_ROOT="${RESULTS_ROOT:-results/v2}"
 FIG_DIR="${FIG_DIR:-figures/v2}"
+MANIFEST="${MANIFEST:-slurm/experiments_v2.txt}"
+
+# afterany lets this job report an incomplete array, but it must not create the
+# completion sentinel unless all manifest runs have valid complete sidecars.
+python scripts/check_v2_completion.py --manifest "$MANIFEST" \
+    --raw_dir "$RESULTS_ROOT/raw"
 
 python scripts/postprocess_v2.py \
     --raw_dir "$RESULTS_ROOT/raw" \

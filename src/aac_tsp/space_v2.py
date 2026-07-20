@@ -1,4 +1,4 @@
-"""The v2 configuration space (single source of truth for all configurators).
+"""The v2 configuration spaces (single source of truth for all configurators).
 
 15 hyperparameters: 12 always active, 3 conditional. Mixed types (log-floats,
 linear floats, log-ints, categoricals) and a hierarchical structure -- exactly the
@@ -28,15 +28,31 @@ large genuinely-bad regions (quenching cooling rates, random-walk temperatures,
 swap/insert-dominated neighbourhoods), so Random Search keeps paying for them while
 a model-based configurator can learn to avoid them.
 
-The same definition is exposed three ways:
-  - ``optuna_suggest_v2(trial)``   define-by-run for Optuna TPE / RandomSampler
-  - ``build_configspace(seed)``    ConfigSpace object for SMAC (with conditionals)
-  - ``config_from_mapping(m)``     any dict-like (incl. SMAC Configuration) -> SAExtConfig
+``full`` exposes all 15 parameters. ``large_fixed_2opt`` fixes the four move
+weights to pure 2-opt and tunes the remaining 11 schedule/construction/restart
+parameters.  The latter removes the large "discover 2-opt" structural cliff and
+is the signal-focused space for BO-vs-Random-Search comparisons. ``fixed_2opt``
+is accepted as a backwards-friendly alias.
+
+The same definition is exposed three ways (each takes ``config_space``):
+  - ``optuna_suggest_v2``       define-by-run for Optuna TPE / RandomSampler
+  - ``build_configspace``       ConfigSpace object for SMAC (with conditionals)
+  - ``config_from_mapping``     mapping (incl. SMAC Configuration) -> SAExtConfig
 """
 
 from __future__ import annotations
 
 from .solver_sa_ext import SAExtConfig
+
+CONFIG_SPACES_V2 = ("full", "large_fixed_2opt", "fixed_2opt")
+_FIXED_2OPT_SPACES = {"large_fixed_2opt", "fixed_2opt"}
+_MOVE_COLUMNS = ["p_swap", "p_insert", "p_2opt", "p_oropt"]
+_FIXED_2OPT_MOVES = {
+    "p_swap": 0.0,
+    "p_insert": 0.0,
+    "p_2opt": 1.0,
+    "p_oropt": 0.0,
+}
 
 # Fill values for parameters that are inactive under the sampled conditionals.
 # The solver never reads an inactive parameter, but rows in the CSVs need a value.
@@ -54,16 +70,39 @@ PARAM_COLUMNS = [
 ]
 
 
-def optuna_suggest_v2(trial) -> SAExtConfig:
+def _check_config_space(config_space: str) -> str:
+    if config_space not in CONFIG_SPACES_V2:
+        raise ValueError(
+            f"unknown v2 config space {config_space!r}; expected one of "
+            f"{CONFIG_SPACES_V2}"
+        )
+    return config_space
+
+
+def active_param_columns(config_space: str = "full") -> list[str]:
+    """Columns actually proposed by a configurator in this space."""
+    _check_config_space(config_space)
+    if config_space in _FIXED_2OPT_SPACES:
+        return [c for c in PARAM_COLUMNS if c not in _MOVE_COLUMNS]
+    return list(PARAM_COLUMNS)
+
+
+def optuna_suggest_v2(trial, config_space: str = "full") -> SAExtConfig:
     """Sample the v2 space with Optuna's define-by-run API (conditionals included)."""
+    _check_config_space(config_space)
     initial_temperature = trial.suggest_float("initial_temperature", 0.01, 5000.0, log=True)
     cooling_rate = trial.suggest_float("cooling_rate", 0.5, 0.9999)
     min_temperature = trial.suggest_float("min_temperature", 1e-6, 1.0, log=True)
     iterations_per_temp = trial.suggest_int("iterations_per_temp", 1, 500, log=True)
-    p_swap = trial.suggest_float("p_swap", 0.0, 1.0)
-    p_insert = trial.suggest_float("p_insert", 0.0, 1.0)
-    p_2opt = trial.suggest_float("p_2opt", 0.0, 1.0)
-    p_oropt = trial.suggest_float("p_oropt", 0.0, 1.0)
+    if config_space in _FIXED_2OPT_SPACES:
+        p_swap, p_insert, p_2opt, p_oropt = (
+            _FIXED_2OPT_MOVES[c] for c in _MOVE_COLUMNS
+        )
+    else:
+        p_swap = trial.suggest_float("p_swap", 0.0, 1.0)
+        p_insert = trial.suggest_float("p_insert", 0.0, 1.0)
+        p_2opt = trial.suggest_float("p_2opt", 0.0, 1.0)
+        p_oropt = trial.suggest_float("p_oropt", 0.0, 1.0)
     init_method = trial.suggest_categorical("init_method", ["random", "nearest_neighbor"])
     restarts = trial.suggest_int("restarts", 0, 16)
     restart_strategy = trial.suggest_categorical("restart_strategy", ["fresh", "perturb_best"])
@@ -95,9 +134,10 @@ def optuna_suggest_v2(trial) -> SAExtConfig:
     )
 
 
-def build_configspace(seed: int):
+def build_configspace(seed: int, config_space: str = "full"):
     """The same space as a ConfigSpace object for SMAC (imports lazily so the
     Optuna-only arms run on machines without SMAC/ConfigSpace installed)."""
+    _check_config_space(config_space)
     from ConfigSpace import (Categorical, ConfigurationSpace, EqualsCondition,
                              Float, Integer)
 
@@ -118,25 +158,34 @@ def build_configspace(seed: int):
     reheat_interval = Integer("reheat_interval", (5, 100), default=20)
     reheat_factor = Float("reheat_factor", (0.001, 1.0), log=True, default=0.1)
 
-    items = [initial_temperature, cooling_rate, min_temperature, iterations_per_temp,
-             p_swap, p_insert, p_2opt, p_oropt,
-             init_method, restarts, restart_strategy, perturbation_kicks,
+    move_items = [] if config_space in _FIXED_2OPT_SPACES else [
+        p_swap, p_insert, p_2opt, p_oropt
+    ]
+    hyperparameters = [
+             initial_temperature, cooling_rate, min_temperature, iterations_per_temp,
+             *move_items, init_method, restarts, restart_strategy, perturbation_kicks,
              use_reheat, reheat_interval, reheat_factor,
+    ]
+    conditions = [
              EqualsCondition(perturbation_kicks, restart_strategy, "perturb_best"),
              EqualsCondition(reheat_interval, use_reheat, "yes"),
-             EqualsCondition(reheat_factor, use_reheat, "yes")]
+             EqualsCondition(reheat_factor, use_reheat, "yes")
+    ]
+    items = hyperparameters + conditions
     try:
         cs.add(items)                     # ConfigSpace >= 1.0
     except (TypeError, AttributeError):   # pragma: no cover - legacy 0.x API
-        cs.add_hyperparameters(items[:15])
-        cs.add_conditions(items[15:])
+        cs.add_hyperparameters(hyperparameters)
+        cs.add_conditions(conditions)
     return cs
 
 
-def config_from_mapping(m) -> SAExtConfig:
+def config_from_mapping(m, config_space: str = "full") -> SAExtConfig:
     """Build an SAExtConfig from any dict-like mapping (plain dict, SMAC/ConfigSpace
     ``Configuration``, pandas row). Inactive conditional parameters fall back to
     ``INACTIVE_DEFAULTS``."""
+    _check_config_space(config_space)
+
     def get(name, default=None):
         try:
             v = m.get(name, default)
@@ -147,15 +196,17 @@ def config_from_mapping(m) -> SAExtConfig:
                 v = default
         return default if v is None else v
 
+    move_defaults = (_FIXED_2OPT_MOVES if config_space in _FIXED_2OPT_SPACES
+                     else {c: None for c in _MOVE_COLUMNS})
     return SAExtConfig(
         initial_temperature=float(get("initial_temperature")),
         cooling_rate=float(get("cooling_rate")),
         min_temperature=float(get("min_temperature")),
         iterations_per_temp=int(get("iterations_per_temp")),
-        p_swap=float(get("p_swap")),
-        p_insert=float(get("p_insert")),
-        p_2opt=float(get("p_2opt")),
-        p_oropt=float(get("p_oropt")),
+        p_swap=float(get("p_swap", move_defaults["p_swap"])),
+        p_insert=float(get("p_insert", move_defaults["p_insert"])),
+        p_2opt=float(get("p_2opt", move_defaults["p_2opt"])),
+        p_oropt=float(get("p_oropt", move_defaults["p_oropt"])),
         init_method=str(get("init_method")),
         restarts=int(get("restarts")),
         restart_strategy=str(get("restart_strategy")),

@@ -40,7 +40,7 @@ class RunConfig:
     max_steps: int = DEFAULT_MAX_STEPS
     cv_repeats: int = 3
     bootstrap_repeats: int = 10
-    data_dir: str = "/local/anmol/datasets/tsp"
+    data_dir: str = "/local/rohit/datasets/tsp"
     out_dir: str = "results/raw"
     extra: dict = field(default_factory=dict)
 

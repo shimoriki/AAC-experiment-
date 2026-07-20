@@ -6,8 +6,9 @@ Along the validation-incumbent trajectory (theta*_t = argmin_{i<=t} val_i):
   generalization_gap_t   = test_t - val_t
   overtuning_t           = test_t - min_{t'<=t} test_{t'}            (>= 0)
   relative_overtuning_t  = overtuning_t / (test_1 - min_{t'<=t} test_{t'})
-                           (NaN when the denominator < EPS; >= 1 means all the
-                            test-side progress over the first incumbent was lost)
+                           (reported only once test-side progress is at least
+                            RELATIVE_OVERTUNING_MIN_PROGRESS; >= 1 means all the
+                            progress over the first incumbent was lost)
 """
 
 from __future__ import annotations
@@ -15,7 +16,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Numerical/nonzero tolerance used for absolute overtuning.  Schneider et al.
+# use a separate, larger threshold for deciding whether the denominator of
+# relative overtuning is scientifically stable enough to report.  Our tour-gap
+# metric is also on a roughly 0--1 scale, so their 0.001 threshold applies
+# directly (paper Section 5, p. 6).
 EPS = 1e-4
+RELATIVE_OVERTUNING_MIN_PROGRESS = 1e-3
 
 
 def incumbent_trajectory(run_df: pd.DataFrame) -> pd.DataFrame:
@@ -60,8 +67,13 @@ def incumbent_trajectory(run_df: pd.DataFrame) -> pd.DataFrame:
     overtuning = test_t - best_test_so_far
     denom = test_t[0] - best_test_so_far
     with np.errstate(invalid="ignore", divide="ignore"):
-        rel = np.where(np.abs(denom) < EPS, np.nan, overtuning / denom)
+        rel_raw = np.where(denom < EPS, np.nan, overtuning / denom)
+    eligible = denom >= RELATIVE_OVERTUNING_MIN_PROGRESS
+    rel = np.where(eligible, rel_raw, np.nan)
     traj["overtuning_t"] = overtuning
+    traj["test_progress_from_initial_t"] = denom
+    traj["relative_overtuning_eligible_t"] = eligible
+    traj["relative_overtuning_raw_t"] = rel_raw
     traj["relative_overtuning_t"] = rel
     return traj
 
@@ -70,6 +82,7 @@ def summarize_run(traj: pd.DataFrame) -> dict:
     """One-row summary for a run from its incumbent trajectory."""
     last = traj.iloc[-1]
     rel = traj["relative_overtuning_t"].to_numpy(dtype=float)
+    rel_raw = traj["relative_overtuning_raw_t"].to_numpy(dtype=float)
     rel_valid = rel[~np.isnan(rel)]
     over = traj["overtuning_t"].to_numpy(dtype=float)
     return {
@@ -83,7 +96,17 @@ def summarize_run(traj: pd.DataFrame) -> dict:
         "final_test_cost": float(last["test_t"]),
         "final_generalization_gap": float(last["generalization_gap_t"]),
         "final_overtuning": float(last["overtuning_t"]),
+        "test_progress_from_initial": float(last["test_progress_from_initial_t"]),
+        "relative_overtuning_eligible": bool(last["relative_overtuning_eligible_t"]),
+        "final_relative_overtuning_raw": (
+            float(rel_raw[-1]) if not np.isnan(rel_raw[-1]) else np.nan
+        ),
         "final_relative_overtuning": float(rel[-1]) if not np.isnan(rel[-1]) else np.nan,
+        "is_final_overtuned": bool(last["overtuning_t"] > EPS),
+        "is_severe_overtuning": bool(
+            last["relative_overtuning_eligible_t"]
+            and not np.isnan(rel[-1]) and rel[-1] >= 1.0
+        ),
         "max_overtuning": float(np.nanmax(over)) if len(over) else np.nan,
         "best_test_seen": float(np.min(traj["test_t"].to_numpy())),
         "proportion_nonzero_overtuning": float(np.mean(over > EPS)),

@@ -22,6 +22,7 @@ import time
 import numpy as np
 
 from .objective import TEST_SEED_OFFSET, _derive_seed
+from .resampling_v2 import ResamplingPlanV2
 from .solver_sa_ext import SAExtConfig, run_sa_ext
 
 
@@ -44,6 +45,41 @@ def evaluate_on_ids(config: SAExtConfig, ids, dist_by_id, best_known_by_id, id_i
         "cost": float(np.mean(gaps)),
         "n_sa_calls": n_calls,
         "runtime_sec": time.perf_counter() - t0,
+    }
+
+
+def evaluate_on_resampling_plan(
+    config: SAExtConfig,
+    plan: ResamplingPlanV2,
+    dist_by_id,
+    best_known_by_id,
+    id_index,
+    repeats: int,
+    max_steps: int,
+) -> dict:
+    """Mean of subset means for the optimizer-facing validation estimator."""
+    t0 = time.perf_counter()
+    subset_means = []
+    n_calls = 0
+    for ids, subset_seed in plan.subsets:
+        instance_gaps = []
+        for iid in ids:
+            bk = best_known_by_id[iid]
+            gap = 0.0
+            for repeat in range(repeats):
+                sa_seed = _derive_seed(subset_seed, id_index[iid], repeat)
+                result = run_sa_ext(
+                    dist_by_id[iid], config, sa_seed, max_steps=max_steps
+                )
+                gap += (result["tour_length"] - bk) / bk
+                n_calls += 1
+            instance_gaps.append(gap / repeats)
+        subset_means.append(float(np.mean(instance_gaps)))
+    return {
+        "cost": float(np.mean(subset_means)),
+        "n_sa_calls": n_calls,
+        "runtime_sec": time.perf_counter() - t0,
+        "n_subsets": plan.n_subsets,
     }
 
 

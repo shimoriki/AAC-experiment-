@@ -14,7 +14,9 @@ def main():
 
     out = build_outputs_v2(args.raw_dir, args.processed_dir, args.summaries_dir)
     print(f"Post-processed {out['n_runs']} runs")
-    for k in ("grid", "summary", "condition", "tests"):
+    for k in ("grid", "summary", "condition", "tests", "paired", "parameters",
+              "resampling_tests", "interactions", "checkpoint_runs",
+              "checkpoint_summary", "contrasts"):
         print(f"  {k}: {out[k]}")
 
 

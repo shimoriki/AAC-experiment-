@@ -16,7 +16,11 @@ def main():
     args = ap.parse_args()
 
     res = build_outputs(Path(args.raw_dir), Path(args.processed_dir), Path(args.summaries_dir))
-    print(f"Processed {res['n_runs']} runs (epsilon={res['eps']}).")
+    print(
+        f"Processed {res['n_runs']} runs (absolute epsilon={res['eps']}, "
+        f"relative-overtuning minimum progress="
+        f"{res['relative_overtuning_min_progress']})."
+    )
     print(f"  trajectories -> {res['trajectories']}")
     print(f"  run summary  -> {res['summary']}")
     print(f"  conditions   -> {res['condition']}")
