@@ -1,0 +1,26 @@
+# Main factorial v2 benchmark: 4 configurators x 4 instance-resampling methods
+# x 12 matched seeds = 192 runs at the central signal-focused condition.
+#
+# n_trials defines a common reference budget of 200 x 25 = 5000 SA calls.
+# Cheaper estimators evaluate more configurations; repeated estimators evaluate
+# fewer. Every factorial cell receives the same SA-call cap; fixed estimators may
+# leave a remainder smaller than one complete estimator evaluation.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+resamplings: [holdout, cv5, repeated_cv5, bootstrap_oob]
+train_families: [mixed]
+train_sizes: [25]
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+config_space: large_fixed_2opt
+n_trials: 200
+solver_repeats: 1
+test_solver_repeats: 3
+test_size: 100
+n_cities: 50
+max_steps: 10000
+tpe_startup_trials: 15
+smac_initial_configs: 15
+smac_retrain_after: 8
+smac_max_config_calls: 8
+cv_repeats: 3
+bootstrap_repeats: 10
+progress_interval: 20

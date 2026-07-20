@@ -1,0 +1,17 @@
+# Multi-condition plumbing smoke test: 2 spaces x 4 configurators x 2 seeds.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+conditions:
+  - {train_family: mixed, train_size: 8, config_space: large_fixed_2opt}
+  - {train_family: mixed, train_size: 8, config_space: full}
+seeds: [0, 1]
+n_trials: 12
+solver_repeats: 1
+test_solver_repeats: 1
+test_size: 10
+n_cities: 50
+max_steps: 2000
+tpe_startup_trials: 4
+smac_initial_configs: 4
+smac_retrain_after: 8
+smac_max_config_calls: 4
+progress_interval: 4

@@ -1,0 +1,26 @@
+# Optional expanded factorial study: 4 targeted conditions x 4 configurators
+# x 4 resampling methods x 8 paired seeds = 512 runs.
+# Covers training-set size, the 11-vs-15-parameter space comparison, and a
+# training-distribution shift without constructing the huge full Cartesian grid.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+resamplings: [holdout, cv5, repeated_cv5, bootstrap_oob]
+conditions:
+  - {train_family: mixed,   train_size: 8,  config_space: large_fixed_2opt}
+  - {train_family: mixed,   train_size: 25, config_space: large_fixed_2opt}
+  - {train_family: mixed,   train_size: 25, config_space: full}
+  - {train_family: uniform, train_size: 25, config_space: large_fixed_2opt}
+seeds: [0, 1, 2, 3, 4, 5, 6, 7]
+n_trials: 150
+solver_repeats: 1
+test_solver_repeats: 3
+test_size: 100
+n_cities: 50
+max_steps: 10000
+tpe_startup_trials: 15
+smac_initial_configs: 15
+smac_retrain_after: 8
+smac_max_config_calls: 8
+cv_repeats: 3
+bootstrap_repeats: 10
+progress_interval: 20
+

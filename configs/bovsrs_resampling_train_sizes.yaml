@@ -1,0 +1,38 @@
+# Training-size factorial on the same synthetic 50-city TSP pools used by v1.
+#
+# 4 configurators x 4 instance-resampling methods x 3 training sizes
+# x 12 matched seeds = 576 runs.
+#
+# Every condition receives exactly 5,000 optimization SA solver calls:
+#   n=10: 500 reference proposals x 10 instances
+#   n=25: 200 reference proposals x 25 instances
+#   n=50: 100 reference proposals x 50 instances
+# Fixed estimators may leave a remainder smaller than one complete evaluation.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+resamplings: [holdout, cv5, repeated_cv5, bootstrap_oob]
+conditions:
+  - train_family: mixed
+    train_size: 10
+    config_space: large_fixed_2opt
+    n_trials: 500
+  - train_family: mixed
+    train_size: 25
+    config_space: large_fixed_2opt
+    n_trials: 200
+  - train_family: mixed
+    train_size: 50
+    config_space: large_fixed_2opt
+    n_trials: 100
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+solver_repeats: 1
+test_solver_repeats: 3
+test_size: 100
+n_cities: 50
+max_steps: 10000
+tpe_startup_trials: 15
+smac_initial_configs: 15
+smac_retrain_after: 8
+smac_max_config_calls: 8
+cv_repeats: 3
+bootstrap_repeats: 10
+progress_interval: 20

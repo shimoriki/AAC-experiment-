@@ -1,0 +1,29 @@
+# Fast structural check of the 3-size factorial: 48 runs and 500 SA calls/cell.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+resamplings: [holdout, cv5, repeated_cv5, bootstrap_oob]
+conditions:
+  - train_family: mixed
+    train_size: 10
+    config_space: large_fixed_2opt
+    n_trials: 50
+  - train_family: mixed
+    train_size: 25
+    config_space: large_fixed_2opt
+    n_trials: 20
+  - train_family: mixed
+    train_size: 50
+    config_space: large_fixed_2opt
+    n_trials: 10
+seeds: [0]
+solver_repeats: 1
+test_solver_repeats: 1
+test_size: 10
+n_cities: 50
+max_steps: 1000
+tpe_startup_trials: 4
+smac_initial_configs: 4
+smac_retrain_after: 4
+smac_max_config_calls: 4
+cv_repeats: 3
+bootstrap_repeats: 10
+progress_interval: 5

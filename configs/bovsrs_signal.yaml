@@ -1,0 +1,22 @@
+# Signal-focused v2 benchmark: 4 configurators x 1 train size x 12 paired seeds.
+#
+# This is the recommended seminar profile.  It keeps all configurator arms but
+# removes the move-neighbourhood cliff by fixing the solver to 2-opt, leaving the
+# temperature, schedule, restart, construction, and reheating parameters to tune.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+train_families: [mixed]
+train_sizes: [25]
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+config_space: large_fixed_2opt
+n_trials: 120
+solver_repeats: 1
+test_solver_repeats: 3
+test_size: 100
+n_cities: 50
+max_steps: 10000
+tpe_startup_trials: 15
+smac_initial_configs: 15
+smac_retrain_after: 8
+smac_max_config_calls: 8
+progress_interval: 20
+

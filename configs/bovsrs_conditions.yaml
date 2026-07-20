@@ -1,0 +1,32 @@
+# Main multi-condition configurator benchmark.
+#
+# Six scientifically targeted conditions avoid an unnecessarily large Cartesian
+# product while testing training-set size, training distribution, and search-space
+# dimensionality. Every condition uses all four configurators and the same 20
+# paired seeds: 6 x 4 x 20 = 480 runs.
+optimizers: [random, optuna_tpe, smac_bo, smac_aac]
+conditions:
+  # Training-set-size effect (same family and 11-parameter space).
+  - {train_family: mixed, train_size: 8,  config_space: large_fixed_2opt}
+  - {train_family: mixed, train_size: 25, config_space: large_fixed_2opt}
+  - {train_family: mixed, train_size: 50, config_space: large_fixed_2opt}
+
+  # Parameter/search-space effect at the central data condition (15 parameters).
+  - {train_family: mixed, train_size: 25, config_space: full}
+
+  # Training-distribution effect at the central size and 11-parameter space.
+  - {train_family: uniform,   train_size: 25, config_space: large_fixed_2opt}
+  - {train_family: clustered, train_size: 25, config_space: large_fixed_2opt}
+
+seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+n_trials: 150
+solver_repeats: 1
+test_solver_repeats: 3
+test_size: 100
+n_cities: 50
+max_steps: 10000
+tpe_startup_trials: 20
+smac_initial_configs: 20
+smac_retrain_after: 8
+smac_max_config_calls: 8
+progress_interval: 25
